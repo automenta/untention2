@@ -9,6 +9,15 @@ export interface Note {
   updatedAt: Date;
   // For full-text search, Dexie typically indexes all string properties.
   // We can also use multiEntry indexes for tags if needed for specific queries.
+  // Old field: tags: string[];
+  tagPageIds?: number[]; // Array of TagPage IDs
+}
+
+export interface TagPage {
+  id?: number;
+  name: string; // Unique name of the tag, used for display and lookup. Consider canonical form (e.g. lowercase) for uniqueness.
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface Settings {
@@ -67,55 +76,119 @@ export class NotentionDexie extends Dexie {
   settings!: Table<Settings>;
   lmCache!: Table<LMCacheEntry>;
   nostrProfiles!: Table<NostrProfileNote>;
-  directMessages!: Table<DirectMessage>; // New table for DMs
+  directMessages!: Table<DirectMessage>;
+  tagPages!: Table<TagPage>; // New table for TagPages
 
   constructor() {
     super('notentionDB');
     this.version(1).stores({
-      notes: '++id, title, *tags, createdAt, updatedAt, content',
+      notes: '++id, title, *tags, createdAt, updatedAt, content', // old 'tags' (string array)
       settings: '++id',
     });
     this.version(2).stores({
-      notes: '++id, title, *tags, createdAt, updatedAt, content',
+      // notes schema remains same as v1 regarding tags
       settings: '++id',
       lmCache: '++id, prompt, model, timestamp'
     });
-    // Add new nostrProfiles table in a new version
     this.version(3).stores({
-      notes: '++id, title, *tags, createdAt, updatedAt, content',
-      settings: '++id',
-      lmCache: '++id, prompt, model, timestamp',
-      nostrProfiles: '++id, npub, name, *tags, createdAt, updatedAt, content, nip05, lastChecked' // Index npub for quick lookup
+      // notes schema remains same as v1 regarding tags
+      // nostrProfiles also uses 'tags' (string array) inherited from Note
+      nostrProfiles: '++id, npub, name, *tags, createdAt, updatedAt, content, nip05, lastChecked'
     });
-    // Version 4 was for nip05Verified and nip05VerifiedAt.
-    // These fields were added to the interface, but if they weren't indexed,
-    // a new version bump might not have been strictly necessary if no schema migration
-    // (like default values) was needed. However, it's good practice to version.
-    // Assuming version 4 correctly handled those additions (even if just by interface change and no new indexes).
     this.version(4).stores({
-        // This version should reflect the state after adding nip05Verified, nip05VerifiedAt
-        // If they were indexed, they'd be here. If not, the nostrProfiles line might be identical to v3
-        // or it might list the new fields if we want to be explicit about the schema at this version.
-        // For this example, let's assume v4 was correctly setup for nip05 fields.
-        // If v4 was defined as it was in my memory (adding nip05Verified, nip05VerifiedAt to index string):
-        // nostrProfiles: '++id, npub, name, *tags, createdAt, updatedAt, content, nip05, lastChecked, nip05Verified, nip05VerifiedAt'
-        // If they were not indexed, it would be:
-        // nostrProfiles: '++id, npub, name, *tags, createdAt, updatedAt, content, nip05, lastChecked'
-        // For now, let's assume they were not indexed in v4 to simplify the diff.
+      // No change to tags schema here
     });
-     this.version(5).stores({
-      nostrProfiles: '++id, npub, name, *tags, createdAt, updatedAt, content, nip05, lastChecked, nip05Verified, nip05VerifiedAt, isContact'
-      // Added isContact. If it needs to be queryable, add ', isContact' to the index string.
-      // For now, not indexing it for querying directly via where clause, but it's part of the object.
+    this.version(5).stores({
+      // No change to tags schema here
+      // nostrProfiles: '++id, npub, name, *tags, createdAt, updatedAt, content, nip05, lastChecked, nip05Verified, nip05VerifiedAt, isContact'
     });
     this.version(6).stores({
       directMessages: '++id, eventId, peerNpub, createdAt, &[peerNpub+createdAt]'
-      // Indexing:
-      // ++id: auto-incrementing primary key
-      // eventId: for uniqueness and potential lookups (though eventId itself is usually the primary key in Nostr contexts)
-      // peerNpub: to easily query all messages with a specific contact
-      // createdAt: for sorting messages chronologically
-      // &[peerNpub+createdAt]: compound index for efficient querying of messages for a contact, sorted by time.
+    });
+    // Version 7: Introduce TagPages and migrate Notes to use tagPageIds
+    this.version(7).stores({
+      notes: '++id, title, *tagPageIds, createdAt, updatedAt, content',
+      settings: 'id',
+      lmCache: '++id',
+      nostrProfiles: '++id, npub, name, *tagPageIds, createdAt, updatedAt, content, nip05, lastChecked, nip05Verified, nip05VerifiedAt, isContact',
+      directMessages: '++id, eventId, peerNpub, createdAt, &[peerNpub+createdAt]',
+      tagPages: '++id, &name, createdAt, updatedAt' // 'name' must be unique
+    }).upgrade(async (tx) => {
+      // Migration for notes
+      await tx.table('notes').toCollection().modify(async (note: any) => { // Use 'any' for old structure
+        if (note.tags && Array.isArray(note.tags) && note.tags.length > 0) {
+          const tagPageIds: number[] = [];
+          for (const tagName of note.tags) {
+            if (typeof tagName === 'string' && tagName.trim() !== '') {
+              const canonicalName = tagName.trim().toLowerCase(); // Use lowercase for lookup/uniqueness
+              let tagPage = await tx.table('tagPages').where('name').equalsIgnoreCase(canonicalName).first();
+              if (!tagPage) {
+                // Store the first encountered casing for display, but uniqueness is via canonicalName (or &name index which is case sensitive by default)
+                // To enforce true case-insensitivity at DB level for 'name', it's tricky with Dexie's &name.
+                // Here, we use canonicalName for lookup. If &name is case sensitive, "Tag" and "tag" could both be added.
+                // To ensure "Tag" and "tag" map to the SAME TagPage, we must ensure 'name' in tagPages is stored canonically (e.g. lowercase)
+                // OR handle this logic strictly in getTagPageByName ensuring it always checks/creates based on lowercase.
+                // Let's assume tagPages.name will store the name as first encountered, and rely on service layer for canonical checks,
+                // OR, better, store 'name' in a canonical form (e.g. lowercase) in TagPage schema directly for &name index.
+                // For this migration, we'll try to add the tag with its original casing if not found by case-insensitive search.
+                // If the &name index is case-sensitive, this could lead to "tag" and "Tag" if both were present.
+                // A safer approach for the DB index: store TagPage.name as lowercase.
+                // For now, let's try adding and if it fails due to unique constraint (if we made name lowercase in schema), it's fine.
+                // Let's refine: store name in TagPage as given (first-encountered casing), ensure lookup is canonical.
+                // The '&name' index in Dexie is case-SENSITIVE for uniqueness.
+                // So, we must store a canonical name if we want "tag" and "Tag" to be the same.
+                // Option: Add a 'canonicalName' field to TagPage for index, or ensure 'name' itself is canonical.
+                // Let's simplify: the first version of a tag (e.g. "Work") sets the canonical name.
+                // Subsequent "work" or "WORK" will map to "Work".
+
+                let existingTagPage = await tx.table('tagPages').where('name').equalsIgnoreCase(tagName.trim()).first();
+                if (!existingTagPage) {
+                    const newTagPageId = await tx.table('tagPages').add({
+                        name: tagName.trim(), // Store the first-encountered casing
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    });
+                    tagPageIds.push(newTagPageId as number);
+                } else {
+                    tagPageIds.push(existingTagPage.id);
+                }
+              } else {
+                tagPageIds.push(tagPage.id);
+              }
+            }
+          }
+          note.tagPageIds = [...new Set(tagPageIds)]; // Ensure unique IDs
+        } else {
+          note.tagPageIds = []; // Initialize if tags was empty or not present
+        }
+        delete note.tags; // Remove old tags field
+      });
+
+      // Migration for nostrProfiles (similar logic)
+      await tx.table('nostrProfiles').toCollection().modify(async (profile: any) => {
+        if (profile.tags && Array.isArray(profile.tags) && profile.tags.length > 0) {
+          const tagPageIds: number[] = [];
+          for (const tagName of profile.tags) {
+            if (typeof tagName === 'string' && tagName.trim() !== '') {
+              let existingTagPage = await tx.table('tagPages').where('name').equalsIgnoreCase(tagName.trim()).first();
+              if (!existingTagPage) {
+                  const newTagPageId = await tx.table('tagPages').add({
+                      name: tagName.trim(),
+                      createdAt: new Date(),
+                      updatedAt: new Date()
+                  });
+                  tagPageIds.push(newTagPageId as number);
+              } else {
+                  tagPageIds.push(existingTagPage.id);
+              }
+            }
+          }
+          profile.tagPageIds = [...new Set(tagPageIds)];
+        } else {
+          profile.tagPageIds = [];
+        }
+        delete profile.tags;
+      });
     });
   }
 

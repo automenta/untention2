@@ -1,14 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import AppLayout from './components/AppLayout';
+import CommandPalette, { CommandAction } from './components/CommandPalette'; // Import CommandPalette
+import {
+  DocumentPlusIcon,
+  UserPlusIcon,
+  Cog8ToothIcon,
+  SunIcon,
+  MoonIcon,
+  ChatBubbleLeftRightIcon,
+} from '@heroicons/react/24/outline';
+import { useHotkeys } from 'react-hotkeys-hook'; // Import useHotkeys
 import AddNostrContactModal from './components/AddNostrContactModal';
 import NostrProfileView from './components/NostrProfileView';
 import DirectMessagesPage from './pages/DirectMessagesPage'; // Import DM Page
-import { db, Note, NostrProfileNote, DirectMessage } from './db/db';
+import { db, Note, NostrProfileNote, DirectMessage, TagPage } from './db/db'; // Added TagPage
 import * as noteService from './services/noteService';
-import *  as nostrProfileService from './services/nostrProfileService';
+import * as nostrProfileService from './services/nostrProfileService';
 import * as nostrService from './services/nostrService'; // For Kind 3 fetch
 import * as settingsService from './services/settingsService'; // To check for theme and nostr pubkey
+import * as tagPageService from './services/tagPageService'; // Import tagPageService
+import { TagPageWithCount } from './services/tagPageService'; // Import type
 
 type ActiveView =
   | { type: 'note'; id: number | null }
@@ -23,35 +35,171 @@ function App() {
   const [currentNote, setCurrentNote] = useState<Note | NostrProfileNote | null>(null);
   const [isEditing, setIsEditing] = useState(false); // For note/profile editor
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  // const [selectedTag, setSelectedTag] = useState<string | null>(null); // Replaced by selectedTagPageId
+  const [selectedTagPageId, setSelectedTagPageId] = useState<number | null>(null);
 
   const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false); // State for Command Palette
+  const [theme, setTheme] = useState<'light' | 'dark'>(
+    localStorage.getItem('theme') as 'light' | 'dark' || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+  );
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768); // Open by default on desktop
+
+  // Keyboard shortcut for Command Palette
+  useHotkeys('ctrl+k, cmd+k', (event) => {
+    event.preventDefault(); // Prevent browser's default find action or other conflicts
+    setIsCommandPaletteOpen(prev => !prev);
+  }, { preventDefault: true }, [setIsCommandPaletteOpen]);
+
 
   // Live queries
   const notes = useLiveQuery(
-    () => selectedTag
-      ? noteService.getNotesByTag(selectedTag)
-      : noteService.searchNotes(searchTerm),
-    [searchTerm, selectedTag], []
+    () => selectedTagPageId !== null
+      ? noteService.getNotesByTagPageId(selectedTagPageId)
+      : noteService.searchNotes(searchTerm), // searchNotes should ideally also be aware of tagPageId if combined search is needed
+    [searchTerm, selectedTagPageId], []
   ) || [];
 
-  const nostrProfiles = useLiveQuery(
-    () => searchTerm
-      ? db.nostrProfiles.filter(p => p.name?.toLowerCase().includes(searchTerm.toLowerCase()) || p.npub.includes(searchTerm.toLowerCase()) || p.title.toLowerCase().includes(searchTerm.toLowerCase())).toArray()
+  const nostrProfiles = useLiveQuery( // Assuming nostrProfiles might also be taggable in the future or share search logic
+    () => searchTerm // This part needs review if nostrProfiles are also filtered by selectedTagPageId
+      ? nostrProfileService.searchProfiles(searchTerm) // Assuming a searchProfiles function exists or is similar to noteService.searchNotes
+      // If nostrProfiles should also filter by selectedTagPageId, this query needs to be more complex:
+      // Example: selectedTagPageId !== null ? nostrProfileService.getProfilesByTagPageId(selectedTagPageId) : nostrProfileService.searchProfiles(searchTerm)
       : nostrProfileService.getAllProfileNotes(),
-    [searchTerm], []
+    [searchTerm /*, selectedTagPageId */], // Add selectedTagPageId if it filters profiles
+    []
   ) || [];
 
-  const allTags = useLiveQuery(noteService.getAllTags, [], []) || [];
+  // Fetch all TagPages with their item counts for the sidebar
+  const allTagPagesWithCounts = useLiveQuery(
+    tagPageService.getAllTagPagesWithItemCounts,
+    [], // No direct dependencies for the query itself, liveQuery handles updates from Dexie
+    [] // Initial empty array
+  ) || [];
+
   const currentSettings = useLiveQuery(settingsService.getSettings, []);
 
   useEffect(() => {
-    // Apply theme from settings
-    if (currentSettings?.theme) {
-      document.documentElement.classList.toggle('dark', currentSettings.theme === 'dark');
+    // Apply theme from settings OR local theme state
+    const themeToApply = currentSettings?.theme || theme;
+    if (themeToApply) {
+      document.documentElement.classList.toggle('dark', themeToApply === 'dark');
+      localStorage.setItem('theme', themeToApply); // Save to localStorage
+      if (currentSettings && currentSettings.theme !== themeToApply) {
+        // If settingsService has a theme, and it's different, update settingsService
+        // This syncs theme changes from command palette back to settings
+        settingsService.updateSettings({ theme: themeToApply });
+      }
     }
-  }, [currentSettings?.theme]);
+  }, [theme, currentSettings?.theme]);
+
+
+  const toggleTheme = () => {
+    setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
+  };
+
+  const commandActions: CommandAction[] = [
+    {
+      id: 'new-note',
+      name: 'New Note',
+      keywords: 'create document text',
+      perform: () => {
+        handleCreateNewNote();
+        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
+      },
+      icon: <DocumentPlusIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'add-nostr-contact',
+      name: 'Add Nostr Contact',
+      keywords: 'profile person new follow',
+      perform: handleCreateNewProfile,
+      icon: <UserPlusIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'open-settings',
+      name: 'Open Settings',
+      keywords: 'preferences configuration options',
+      perform: () => {
+        handleShowSettings();
+        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
+      },
+      icon: <Cog8ToothIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'toggle-theme',
+      name: `Toggle Theme to ${theme === 'light' ? 'Dark' : 'Light'}`,
+      keywords: 'dark light appearance mode style',
+      perform: toggleTheme,
+      icon: theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />,
+    },
+     {
+      id: 'direct-messages',
+      name: 'Direct Messages',
+      keywords: 'dm chat private message',
+      perform: () => {
+        handleShowDirectMessages();
+        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
+      },
+      icon: <ChatBubbleLeftRightIcon className="w-5 h-5" />,
+    },
+    // Future actions:
+    // - Find/Search Notes (would need a way to then display results or integrate with existing search)
+    // - Find/Search Contacts
+    // - Specific LM tools if available
+    // - Insert template/tag (more complex)
+  ];
+
+  // Re-generate commandActions if theme changes so the "Toggle Theme" name and icon updates
+  // This is a bit of a workaround; ideally, CommandPalette would re-render specific items.
+  // However, given the current structure, regenerating the actions array is simpler.
+  const memoizedCommandActions = React.useMemo(() => [
+    {
+      id: 'new-note',
+      name: 'New Note',
+      keywords: 'create document text',
+      perform: () => {
+        handleCreateNewNote();
+        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
+      },
+      icon: <DocumentPlusIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'add-nostr-contact',
+      name: 'Add Nostr Contact',
+      keywords: 'profile person new follow',
+      perform: handleCreateNewProfile,
+      icon: <UserPlusIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'open-settings',
+      name: 'Open Settings',
+      keywords: 'preferences configuration options',
+      perform: () => {
+        handleShowSettings();
+        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
+      },
+      icon: <Cog8ToothIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'toggle-theme',
+      name: `Toggle Theme to ${theme === 'light' ? 'Dark' : 'Light'}`,
+      keywords: 'dark light appearance mode style',
+      perform: toggleTheme,
+      icon: theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />,
+    },
+     {
+      id: 'direct-messages',
+      name: 'Direct Messages',
+      keywords: 'dm chat private message',
+      perform: () => {
+        handleShowDirectMessages();
+        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
+      },
+      icon: <ChatBubbleLeftRightIcon className="w-5 h-5" />,
+    },
+  ], [theme, isSidebarOpen]); // Add isSidebarOpen as dependency if its state affects perform functions indirectly
+
 
   // Effect for fetching user's Kind 3 contact list on startup
   useEffect(() => {
@@ -271,16 +419,19 @@ function App() {
     <>
       <AppLayout
         sidebar={{
-          notes: notes.filter(n => !n.tags.includes('nostrProfile')), // Filter out profiles from notes list
+          notes: notes.filter(n => !n.tagPageIds?.includes(nostrProfileService.NOSTR_PROFILE_TAG_PAGE_ID_PLACEHOLDER)), // Placeholder for actual ID
           nostrProfiles: nostrProfiles,
-          tags: allTags,
+          // tags: allTags, // Replaced by allTagPagesWithCounts
+          tagPagesWithCounts: allTagPagesWithCounts,
           selectedNoteId: activeView.type === 'note' ? activeView.id : null,
           selectedProfileId: activeView.type === 'profile' ? activeView.id : null,
           onSelectNote: handleSelectNote,
           onCreateNewNote: handleCreateNewNote,
           onCreateNewProfile: handleCreateNewProfile,
-          onSelectTag: setSelectedTag,
-          selectedTag: selectedTag,
+          // onSelectTag: setSelectedTag, // Replaced by onSelectTagPageId
+          onSelectTagPageId: setSelectedTagPageId,
+          // selectedTag: selectedTag, // Replaced by selectedTagPageId
+          selectedTagPageId: selectedTagPageId,
           onShowSettings: handleShowSettings,
           onShowDirectMessages: handleShowDirectMessages, // Pass handler for DMs
           onSearchChange: setSearchTerm,
@@ -310,6 +461,12 @@ function App() {
         isOpen={isAddContactModalOpen}
         onClose={() => setIsAddContactModalOpen(false)}
         onContactAdded={handleContactAdded}
+      />
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        actions={memoizedCommandActions}
+        currentTheme={theme}
       />
     </>
   );

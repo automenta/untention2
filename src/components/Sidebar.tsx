@@ -2,17 +2,22 @@ import React from 'react';
 import { Note, NostrProfileNote } from '../db/db';
 import { PlusIcon, TagIcon, Cog6ToothIcon, DocumentTextIcon, UserCircleIcon, XMarkIcon as MenuCloseIcon } from '@heroicons/react/24/outline'; // Added UserCircleIcon
 
+import { TagPageWithCount } from '../services/tagPageService'; // Import type
+
 interface SidebarProps {
   notes: Note[];
   nostrProfiles: NostrProfileNote[];
-  tags: string[];
+  // tags: string[]; // Replaced by tagPagesWithCounts
+  tagPagesWithCounts: TagPageWithCount[];
   selectedNoteId: number | null;
   selectedProfileId: number | null; // To distinguish selected profile
   onSelectNote: (id: number, isProfile: boolean) => void; // Modified to indicate if it's a profile
   onCreateNewNote: () => void;
   onCreateNewProfile?: () => void; // Optional: if adding profiles directly from sidebar
-  onSelectTag: (tag: string) => void;
-  selectedTag: string | null;
+  // onSelectTag: (tag: string) => void; // Replaced by onSelectTagPageId
+  onSelectTagPageId: (tagPageId: number | null) => void;
+  // selectedTag: string | null; // Replaced by selectedTagPageId
+  selectedTagPageId: number | null;
   onShowSettings: () => void;
   onShowDirectMessages?: () => void; // Added for DM navigation
   onSearchChange: (term: string) => void;
@@ -23,14 +28,17 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({
   notes,
   nostrProfiles,
-  tags,
+  // tags, // Replaced
+  tagPagesWithCounts,
   selectedNoteId,
   selectedProfileId,
   onSelectNote,
   onCreateNewNote,
   onCreateNewProfile,
-  onSelectTag,
-  selectedTag,
+  // onSelectTag, // Replaced
+  onSelectTagPageId,
+  // selectedTag, // Replaced
+  selectedTagPageId,
   onShowSettings,
   onShowDirectMessages, // Destructure new prop
   onSearchChange,
@@ -152,35 +160,36 @@ const Sidebar: React.FC<SidebarProps> = ({
 
         <div>
           <h2 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Tags</h2>
-          {tags.length > 0 ? (
+          {tagPagesWithCounts.length > 0 ? (
             <ul className="space-y-1 max-h-32 overflow-y-auto"> {/* Max height for tags */}
               <li>
                 <a
                   href="#"
-                  onClick={(e) => { e.preventDefault(); handleItemClick(onSelectTag, ''); }}
+                  onClick={(e) => { e.preventDefault(); handleItemClick(onSelectTagPageId, null); }} // Pass null for "All Tags"
                   className={`block px-3 py-2 rounded-md text-sm ${
-                    selectedTag === null || selectedTag === ''
+                    selectedTagPageId === null
                       ? 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-100'
                       : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
                   }`}
                 >
                   <TagIcon className="h-4 w-4 mr-2 inline-block align-text-bottom" />
-                  All Tags
+                  All Items
                 </a>
               </li>
-              {tags.map(tag => (
-                <li key={tag}>
+              {tagPagesWithCounts.map(tagPage => (
+                <li key={tagPage.id}>
                   <a
                     href="#"
-                    onClick={(e) => { e.preventDefault(); handleItemClick(onSelectTag, tag); }}
+                    onClick={(e) => { e.preventDefault(); handleItemClick(onSelectTagPageId, tagPage.id); }}
                     className={`block px-3 py-2 rounded-md text-sm ${
-                      selectedTag === tag
+                      selectedTagPageId === tagPage.id
                         ? 'bg-blue-100 text-blue-700 dark:bg-blue-700 dark:text-white'
                         : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
                     }`}
+                    title={`${tagPage.name} (${tagPage.count})`}
                   >
                      <TagIcon className="h-4 w-4 mr-2 inline-block align-text-bottom" />
-                    {tag}
+                    {tagPage.name} <span className="text-xs opacity-75">({tagPage.count})</span>
                   </a>
                 </li>
               ))}
