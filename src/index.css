@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', sans-serif; /* A common, clean font */
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #ffffff; /* Default light mode background */
+  color: #1f2937; /* Default light mode text */
+}
+
+.dark body {
+  background-color: #1f2937; /* Default dark mode background */
+  color: #f3f4f6; /* Default dark mode text */
+}
