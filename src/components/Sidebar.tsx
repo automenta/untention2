@@ -14,6 +14,7 @@ interface SidebarProps {
   onSelectTag: (tag: string) => void;
   selectedTag: string | null;
   onShowSettings: () => void;
+  onShowDirectMessages?: () => void; // Added for DM navigation
   onSearchChange: (term: string) => void;
   isOpen: boolean;
   onClose: () => void;
@@ -31,6 +32,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onSelectTag,
   selectedTag,
   onShowSettings,
+  onShowDirectMessages, // Destructure new prop
   onSearchChange,
   isOpen,
   onClose,
@@ -46,16 +48,29 @@ const Sidebar: React.FC<SidebarProps> = ({
     <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-gray-50 dark:bg-gray-800 h-screen p-4 flex flex-col border-r dark:border-gray-700 transform ${isOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 ease-in-out md:relative md:translate-x-0 md:flex-shrink-0`}>
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-xl font-semibold text-gray-800 dark:text-white">Notention</h1>
-        <button className="md:hidden p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white" onClick={onClose}>
-            <MenuCloseIcon className="h-6 w-6" />
-        </button>
-        <button
-          onClick={onShowSettings}
-          className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
-          title="Settings"
-        >
-          <Cog6ToothIcon className="h-6 w-6" />
-        </button>
+        <div className="flex items-center space-x-2">
+            {onShowDirectMessages && (
+                 <button
+                    onClick={() => handleItemClick(onShowDirectMessages)}
+                    className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
+                    title="Direct Messages"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-3.86 8.25-8.625 8.25S3.75 16.556 3.75 12D3.75 7.444 7.61 3.75 12.375 3.75S21 7.444 21 12z" />
+                    </svg>
+                </button>
+            )}
+            <button
+              onClick={() => handleItemClick(onShowSettings)}
+              className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
+              title="Settings"
+            >
+              <Cog6ToothIcon className="h-6 w-6" />
+            </button>
+            <button className="md:hidden p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white" onClick={onClose}>
+                <MenuCloseIcon className="h-6 w-6" />
+            </button>
+        </div>
       </div>
 
       <input

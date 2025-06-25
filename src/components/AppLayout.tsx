@@ -12,11 +12,13 @@ export type ActiveViewType =
   | { type: 'note'; id: number | null }
   | { type: 'profile'; id: number | null }
   | { type: 'settings' }
+  | { type: 'direct_messages' } // Added for DM page
   | { type: 'new_note_editor' }
-  | { type: 'new_profile_editor' }; // Though new_profile_editor might just open a modal
+  | { type: 'new_profile_editor' };
 
 interface MainContentProps {
   activeView: ActiveViewType;
+  DirectMessagesPageComponent?: React.FC<any>; // Optional DM Page component
   currentNote: Note | NostrProfileNote | null; // Can be a regular note or a profile note
   isEditing: boolean;
   onSaveNote: (id: number | undefined, title: string, content: string, tags: string[]) => void;
@@ -48,6 +50,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
     onExitSettings,
     editorKey,
     ProfileViewComponent,
+    DirectMessagesPageComponent, // Destructure DM Page Component
     onEditProfileLocalFields,
     onRefetchProfileData,
   } = mainContent;
@@ -120,11 +123,15 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
         </div>
 
         {/* Main content area */}
-        <div className="flex-1 overflow-y-auto bg-white dark:bg-gray-800"> {/* Ensure this takes up space */}
+        <div className="flex-1 overflow-y-auto bg-white dark:bg-gray-800">
           {activeView.type === 'settings' && <SettingsPage onExit={onExitSettings} />}
 
-          {showEditor && (
-            <div className="h-full flex flex-col"> {/* Ensure editor container takes full height */}
+          {activeView.type === 'direct_messages' && DirectMessagesPageComponent && (
+            <DirectMessagesPageComponent />
+          )}
+
+          {showEditor && activeView.type !== 'direct_messages' && ( // Ensure editor doesn't show on DM page
+            <div className="h-full flex flex-col">
               <MarkdownEditor
                 key={editorKey}
                 note={itemToDisplayOrEdit}

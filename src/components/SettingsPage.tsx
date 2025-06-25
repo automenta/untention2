@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import * as settingsService from '../services/settingsService';
-import { Settings } from '../db/db';
-import { generateSecretKey, getPublicKey } from 'nostr-tools'; // For Nostr key generation
-import { EyeIcon, EyeSlashIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import * as nostrProfileService from '../services/nostrProfileService';
+import * as nostrService from '../services/nostrService';
+import { Settings, NostrProfileNote } from '../db/db';
+import { getPublicKey } from 'nostr-tools/pure';
+import { nip19 } from 'nostr-tools/nip19';
+import { generateSecretKey } from 'nostr-tools/pure';
+import { EyeIcon, EyeSlashIcon, ArrowPathIcon, UserCircleIcon, ArrowDownTrayIcon, PencilSquareIcon, UsersIcon } from '@heroicons/react/24/outline';
+import NostrContactsManager from './NostrContactsManager'; // Import the new component
 
 const availableModels = {
   openai: ["gpt-4", "gpt-4-turbo-preview", "gpt-3.5-turbo"],
@@ -25,25 +30,41 @@ const SettingsPage: React.FC = () => {
   const [nostrPrivKey, setNostrPrivKey] = useState('');
   const [showNostrPrivKey, setShowNostrPrivKey] = useState(false);
   const [nostrPubKey, setNostrPubKey] = useState('');
+  const [userNostrProfile, setUserNostrProfile] = useState<Partial<NostrProfileNote>>({});
+  const [showProfileManager, setShowProfileManager] = useState(false);
+  const [profileStatusMessage, setProfileStatusMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [showContactsManager, setShowContactsManager] = useState(false);
+
 
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
+  const deriveAndSetNostrPubKey = useCallback((privKey: string) => {
+    if (privKey && privKey.match(/^[a-f0-9]{64}$/)) {
+      try {
+        const pubKey = getPublicKey(privKey);
+        setNostrPubKey(pubKey);
+        return pubKey;
+      } catch (e) {
+        console.warn("Could not derive Nostr public key from private key.", e);
+        setNostrPubKey('');
+      }
+    } else {
+      setNostrPubKey('');
+    }
+    return '';
+  }, []);
+
+
   useEffect(() => {
     if (currentSettings) {
-      // Decrypt and set API keys
       settingsService.getLmApiKey().then(key => setLmApiKey(key || ''));
       settingsService.getNostrPrivKey().then(key => {
         setNostrPrivKey(key || '');
-        if (key) {
-            try {
-                setNostrPubKey(getPublicKey(key));
-            } catch (e) {
-                console.warn("Could not derive Nostr public key from stored private key.", e);
-                setNostrPubKey(''); // Clear if invalid
-            }
-        } else {
-            setNostrPubKey('');
+        const derivedPubKey = deriveAndSetNostrPubKey(key || '');
+        if (derivedPubKey) {
+          // Attempt to load existing profile from DB once pubkey is known
+          loadProfile(nip19.npubEncode(derivedPubKey));
         }
       });
 
@@ -99,15 +120,111 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleGenerateNostrKeys = () => {
-    const newPrivKey = Buffer.from(generateSecretKey()).toString('hex');
-    setNostrPrivKey(newPrivKey);
+  const loadProfile = useCallback(async (npub: string) => {
+    if (!npub) return;
+    setProfileStatusMessage(null);
     try {
-        const newPubKey = getPublicKey(newPrivKey);
-        setNostrPubKey(newPubKey);
-    } catch(e) {
-        console.error("Error generating nostr public key", e);
-        setNostrPubKey('');
+      let profile = await nostrProfileService.getProfileNoteByNpub(npub);
+      if (profile) {
+        setUserNostrProfile({
+          name: profile.name || '',
+          about: profile.about || '',
+          picture: profile.picture || '',
+          nip05: profile.nip05 || '',
+        });
+      } else {
+        // Initialize with empty fields if no profile found locally
+        setUserNostrProfile({ name: '', about: '', picture: '', nip05: '' });
+      }
+    } catch (e) {
+      console.error("Error loading profile", e);
+      setProfileStatusMessage({ type: 'error', text: 'Failed to load profile.'});
+    }
+  }, []);
+
+  const handleFetchFullProfileFromRelay = async () => {
+    if (!nostrPubKey) {
+      setProfileStatusMessage({ type: 'error', text: 'Nostr Public Key is not set.' });
+      return;
+    }
+    setProfileStatusMessage({ type: 'success', text: 'Fetching profile from relay...' });
+    try {
+      const npub = nip19.npubEncode(nostrPubKey);
+      const fetched = await nostrProfileService.fetchProfileFromRelays(npub);
+      if (fetched) {
+        await nostrProfileService.createOrUpdateProfileNote(
+          { ...fetched, npub: npub }, // pass full fetched data
+          npub,
+          false // Already fetched, just update DB
+        );
+        setUserNostrProfile({ // Update UI form
+          name: fetched.name || '',
+          about: fetched.about || '',
+          picture: fetched.picture || '',
+          nip05: fetched.nip05 || '',
+        });
+        setProfileStatusMessage({ type: 'success', text: 'Profile refreshed from relay.' });
+      } else {
+        setProfileStatusMessage({ type: 'success', text: 'No profile found on relay. You can create one.' });
+        // Keep existing local form data or clear it if desired
+        // setUserNostrProfile({ name: '', about: '', picture: '', nip05: '' });
+      }
+    } catch (error: any) {
+      setProfileStatusMessage({ type: 'error', text: `Failed to fetch profile: ${error.message}` });
+    }
+  };
+
+  const handlePublishProfile = async () => {
+    if (!nostrPubKey || !nostrPrivKey) {
+      setProfileStatusMessage({ type: 'error', text: 'Nostr keys not configured.' });
+      return;
+    }
+    setProfileStatusMessage({ type: 'success', text: 'Publishing profile...' });
+    try {
+      const profileContent = {
+        name: userNostrProfile.name,
+        about: userNostrProfile.about,
+        picture: userNostrProfile.picture,
+        nip05: userNostrProfile.nip05,
+      };
+      // Remove undefined fields from profileContent before publishing
+      Object.keys(profileContent).forEach(key => profileContent[key as keyof typeof profileContent] === undefined && delete profileContent[key as keyof typeof profileContent]);
+
+
+      const publishedEvent = await nostrService.publishProfileEvent(profileContent);
+      if (publishedEvent) {
+        const npub = nip19.npubEncode(nostrPubKey);
+        // Update local DB with the just published data
+        await nostrProfileService.createOrUpdateProfileNote(
+          {
+            npub: npub,
+            name: profileContent.name,
+            picture: profileContent.picture,
+            about: profileContent.about,
+            nip05: profileContent.nip05,
+            lastChecked: new Date(), // Mark as "fresh"
+          },
+          npub,
+          false // Data is from user input, no need to fetch again
+        );
+        setProfileStatusMessage({ type: 'success', text: 'Profile published successfully!' });
+      } else {
+        setProfileStatusMessage({ type: 'error', text: 'Failed to publish profile. Check relay connection.' });
+      }
+    } catch (error: any) {
+      setProfileStatusMessage({ type: 'error', text: `Error publishing profile: ${error.message}` });
+    }
+  };
+
+
+  const handleGenerateNostrKeys = () => {
+    const newPrivKeyArray = generateSecretKey();
+    const newPrivKeyHex = Buffer.from(newPrivKeyArray).toString('hex');
+    setNostrPrivKey(newPrivKeyHex);
+    const newPubKey = deriveAndSetNostrPubKey(newPrivKeyHex);
+    if (newPubKey) {
+        loadProfile(nip19.npubEncode(newPubKey)); // Load profile for new key
+    } else {
         setStatusMessage({ type: 'error', text: 'Error generating Nostr keys.' });
     }
   };
@@ -115,15 +232,17 @@ const SettingsPage: React.FC = () => {
   const handleNostrPrivKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newPrivKey = e.target.value;
     setNostrPrivKey(newPrivKey);
-    if (newPrivKey.match(/^[a-f0-9]{64}$/)) { // Basic hex format check for typical private keys
-        try {
-            setNostrPubKey(getPublicKey(newPrivKey));
-        } catch (err) {
-            setNostrPubKey(''); // Clear if invalid format for getPublicKey
-        }
+    const derivedPubKey = deriveAndSetNostrPubKey(newPrivKey);
+    if (derivedPubKey) {
+      loadProfile(nip19.npubEncode(derivedPubKey));
     } else {
-        setNostrPubKey('');
+      setUserNostrProfile({}); // Clear profile form if key is invalid
     }
+  };
+
+  const handleProfileInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setUserNostrProfile(prev => ({ ...prev, [name]: value }));
   };
 
   const getModelsForProvider = () => {
@@ -303,9 +422,117 @@ const SettingsPage: React.FC = () => {
             placeholder="Automatically derived from private key"
           />
         </div>
+        {nostrPubKey && (
+          <div className="mt-6">
+            <button
+              onClick={() => setShowProfileManager(!showProfileManager)}
+              className="w-full flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:focus:ring-offset-gray-800"
+            >
+              <UserCircleIcon className="h-5 w-5 mr-2" />
+              {showProfileManager ? 'Hide My Nostr Profile Manager' : 'Manage My Nostr Profile (Kind 0)'}
+            </button>
+          </div>
+        )}
+        {nostrPubKey && (
+          <div className="mt-4">
+            <button
+              onClick={() => setShowContactsManager(true)}
+              className="w-full flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 dark:focus:ring-offset-gray-800"
+            >
+              <UsersIcon className="h-5 w-5 mr-2" />
+              Manage Nostr Contacts (Kind 3)
+            </button>
+          </div>
+        )}
       </section>
 
-      <div className="pt-5">
+      {showContactsManager && nostrPubKey && (
+        <NostrContactsManager
+            userNpub={nip19.npubEncode(nostrPubKey)}
+            onClose={() => setShowContactsManager(false)}
+        />
+      )}
+
+      {showProfileManager && nostrPubKey && !showContactsManager && ( // Ensure only one manager is shown if both could be active
+        <section className="mt-8 p-4 border-t border-gray-200 dark:border-gray-700">
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-3">My Nostr Profile (Kind 0)</h3>
+          {profileStatusMessage && (
+            <div className={`mb-3 p-2 rounded-md text-sm ${profileStatusMessage.type === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200' : 'bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-200'}`}>
+              {profileStatusMessage.text}
+            </div>
+          )}
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="profileName" className="block text-sm font-medium text-gray-600 dark:text-gray-400">Name</label>
+              <input
+                type="text"
+                name="name"
+                id="profileName"
+                value={userNostrProfile.name || ''}
+                onChange={handleProfileInputChange}
+                className="mt-1 w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                placeholder="Your display name"
+              />
+            </div>
+            <div>
+              <label htmlFor="profileAbout" className="block text-sm font-medium text-gray-600 dark:text-gray-400">About</label>
+              <textarea
+                name="about"
+                id="profileAbout"
+                rows={3}
+                value={userNostrProfile.about || ''}
+                onChange={handleProfileInputChange}
+                className="mt-1 w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                placeholder="A short bio"
+              />
+            </div>
+            <div>
+              <label htmlFor="profilePicture" className="block text-sm font-medium text-gray-600 dark:text-gray-400">Picture URL</label>
+              <input
+                type="url"
+                name="picture"
+                id="profilePicture"
+                value={userNostrProfile.picture || ''}
+                onChange={handleProfileInputChange}
+                className="mt-1 w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                placeholder="https://example.com/image.png"
+              />
+            </div>
+            <div>
+              <label htmlFor="profileNip05" className="block text-sm font-medium text-gray-600 dark:text-gray-400">NIP-05 Identifier</label>
+              <input
+                type="text"
+                name="nip05"
+                id="profileNip05"
+                value={userNostrProfile.nip05 || ''}
+                onChange={handleProfileInputChange}
+                className="mt-1 w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                placeholder="name@example.com"
+              />
+            </div>
+            <div className="flex space-x-3 mt-4">
+              <button
+                onClick={handleFetchFullProfileFromRelay}
+                className="flex-1 inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-500 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+                title="Fetch your latest profile from the configured relay"
+              >
+                <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
+                Refresh from Relay
+              </button>
+              <button
+                onClick={handlePublishProfile}
+                className="flex-1 inline-flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+                title="Publish your current profile details to the relay"
+              >
+                <PencilSquareIcon className="h-5 w-5 mr-2" />
+                Save & Publish Profile
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <div className="pt-5 mt-8 border-t border-gray-200 dark:border-gray-700">
         <button
           onClick={handleSaveChanges}
           className="w-full px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"

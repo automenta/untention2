@@ -1,13 +1,14 @@
 import { db, NostrProfileNote } from '../db/db';
-import { Relay, Event, nip19, Filter } from 'nostr-tools';
-import * as nostrService from './nostrService'; // For relay connection
-import { getNoteById, updateNote as updateGenericNote, createNote as createGenericNote } from './noteService'; // For potential note linking if needed
+import { Event, nip19, Filter } from 'nostr-tools/pure';
+import * as nostrService from './nostrService'; // For relay connection using SimplePool
+import { queryProfile as nip05QueryProfile } from 'nostr-tools/nip05'; // NIP-05 utility
 
-const PROFILE_FETCH_TIMEOUT_MS = 5000; // 5 seconds timeout for fetching profile
+// const PROFILE_FETCH_TIMEOUT_MS = 5000; // Timeout is now handled by SimplePool's list/get methods' default behavior or can be configured if needed.
 
 export const createOrUpdateProfileNote = async (
   profileData: Partial<NostrProfileNote>,
-  npubToFetch?: string
+  npubToFetch?: string,
+  fetchFromRelay: boolean = true, // Added flag to control fetching
 ): Promise<number | undefined> => {
   let existingProfile: NostrProfileNote | undefined;
   const targetNpub = profileData.npub || npubToFetch;
@@ -19,38 +20,46 @@ export const createOrUpdateProfileNote = async (
   existingProfile = await getProfileNoteByNpub(targetNpub);
 
   let fetchedProfileData: Partial<NostrProfileNote> = {};
-  let shouldFetch = !existingProfile || (existingProfile && (!existingProfile.lastChecked || Date.now() - existingProfile.lastChecked.getTime() > 24 * 60 * 60 * 1000)); // Fetch if new or last check > 1 day ago
+  // Fetch if new, or last check > 1 day ago, or if explicitly told to fetch (and npubToFetch is provided)
+  let shouldFetch = fetchFromRelay && npubToFetch &&
+    (!existingProfile || !existingProfile.lastChecked || Date.now() - existingProfile.lastChecked.getTime() > 24 * 60 * 60 * 1000);
 
-  if (npubToFetch && shouldFetch) {
+  if (shouldFetch) {
     try {
-      const settings = await db.settings.get(1);
-      if (settings?.nostrRelayUrl) {
-        const fetched = await fetchProfileFromRelay(targetNpub, settings.nostrRelayUrl);
-        if (fetched) {
-          fetchedProfileData = {
-            name: fetched.name,
-            picture: fetched.picture,
-            about: fetched.about,
-            nip05: fetched.nip05,
-            lastChecked: new Date(),
-          };
-        } else {
-          fetchedProfileData.lastChecked = new Date(); // Mark as checked even if not found
+      const fetched = await fetchProfileFromRelays(targetNpub); // Uses SimplePool via nostrService
+      if (fetched) {
+        fetchedProfileData = {
+          name: fetched.name,
+          picture: fetched.picture,
+          about: fetched.about,
+          nip05: fetched.nip05,
+          lastChecked: new Date(),
+          // nip05Verified and nip05VerifiedAt would be set here if verification is done during fetch
+        };
+        // If NIP-05 is present, try to verify it
+        if (fetched.nip05) {
+            const verificationResult = await verifyNip05(targetNpub, fetched.nip05);
+            fetchedProfileData.nip05Verified = verificationResult.verified;
+            fetchedProfileData.nip05VerifiedAt = new Date();
         }
+
       } else {
-        console.warn("No Nostr relay configured to fetch profile for", targetNpub);
-        fetchedProfileData.lastChecked = new Date(); // Mark as checked
+        fetchedProfileData.lastChecked = new Date(); // Mark as checked even if not found
       }
     } catch (error) {
       console.error(`Failed to fetch profile for ${targetNpub}:`, error);
       fetchedProfileData.lastChecked = new Date(); // Mark as checked even on error
     }
+  } else if (npubToFetch) {
+    // If not fetching, but npubToFetch was provided, still mark as checked if it's an update based on external data
+    fetchedProfileData.lastChecked = existingProfile?.lastChecked || new Date();
   }
+
 
   const finalProfileData: NostrProfileNote = {
     ...(existingProfile || {}), // Base with existing data or empty object
-    ...fetchedProfileData,      // Apply fetched data
-    ...profileData,            // Apply provided data (overrides fetched if conflicts)
+    ...fetchedProfileData,      // Apply fetched data (includes lastChecked, potentially NIP-05 verification)
+    ...profileData,            // Apply provided data (overrides fetched if conflicts, e.g. local alias)
     npub: targetNpub,          // Ensure npub is set
     updatedAt: new Date(),
   };
@@ -58,13 +67,19 @@ export const createOrUpdateProfileNote = async (
   // Ensure essential Note fields if creating new
   if (!existingProfile) {
     finalProfileData.title = profileData.title || fetchedProfileData.name || targetNpub.substring(0, 10);
-    finalProfileData.content = profileData.content || fetchedProfileData.about || '';
-    finalProfileData.tags = profileData.tags || ['nostrProfile'];
+    finalProfileData.content = profileData.content || fetchedProfileData.about || ''; // Local notes content
+    finalProfileData.tags = profileData.tags || ['nostrProfile']; // Default tag
     finalProfileData.createdAt = new Date();
   } else {
     // If we fetched new data and the user didn't provide a specific title/content, update them from profile
-    if (fetchedProfileData.name && !profileData.title) finalProfileData.title = fetchedProfileData.name;
-    if (fetchedProfileData.about && !profileData.content) finalProfileData.content = fetchedProfileData.about;
+    // Only update title from fetched name if title wasn't explicitly provided in profileData
+    if (fetchedProfileData.name && !profileData.title && finalProfileData.title === (existingProfile.title || existingProfile.npub.substring(0,10))) {
+        finalProfileData.title = fetchedProfileData.name;
+    }
+    // Only update content from fetched about if content wasn't explicitly provided in profileData
+     if (fetchedProfileData.about && !profileData.content && finalProfileData.content === existingProfile.content) {
+        finalProfileData.content = fetchedProfileData.about; // Local notes content can mirror 'about' if not set
+    }
   }
 
 
@@ -72,8 +87,7 @@ export const createOrUpdateProfileNote = async (
     await db.nostrProfiles.update(existingProfile.id, finalProfileData);
     return existingProfile.id;
   } else {
-    // Remove id if it somehow got on finalProfileData from spread
-    const { id, ...dataToInsert } = finalProfileData;
+    const { id, ...dataToInsert } = finalProfileData; // Ensure no 'id' is passed for new entries
     return db.nostrProfiles.add(dataToInsert as NostrProfileNote);
   }
 };
@@ -87,7 +101,7 @@ export const getProfileNoteById = (id: number): Promise<NostrProfileNote | undef
 };
 
 export const getAllProfileNotes = () => {
-  return db.nostrProfiles.orderBy('name').toArray(); // Simple array, can use liveQuery in component
+  return db.nostrProfiles.orderBy('name').toArray();
 };
 
 export const deleteProfileNoteById = (id: number): Promise<void> => {
@@ -103,77 +117,82 @@ export const deleteProfileNoteByNpub = async (npub: string): Promise<boolean> =>
     return false;
 };
 
-export const fetchProfileFromRelay = async (
+// Fetches Kind 0 profile event from configured relays using SimplePool
+export const fetchProfileFromRelays = async (
   npub: string,
-  relayUrl?: string // Optional: if not provided, uses configured relay
 ): Promise<Partial<NostrProfileNote> | null> => {
-  let relayToUse: Relay | null = null;
-  let tempRelay = false;
-
   const pubkeyHex = nostrService.npubToHex(npub);
-
-  if (relayUrl) {
-    try {
-      relayToUse = await Relay.connect(relayUrl);
-      tempRelay = true;
-    } catch (e) {
-      console.error(`Temporary connection to ${relayUrl} failed for profile fetch:`, e);
-      return null;
-    }
-  } else {
-    relayToUse = await nostrService.getRelay();
-  }
-
-  if (!relayToUse) {
-    console.warn('No relay available to fetch Nostr profile for', npub);
+  if (!pubkeyHex) {
+    console.error("Invalid npub provided for profile fetch:", npub);
     return null;
   }
+
+  // Ensure relay pool is using current settings (nostrService handles this)
+  if (!await nostrService.ensureRelayPoolConnected()) {
+     console.warn('Cannot fetch profile, relays not configured/connected for npub:', npub);
+     return null;
+  }
+
+  const filter: Filter = { kinds: [0], authors: [pubkeyHex], limit: 1 };
 
   try {
-    const filter: Filter = { kinds: [0], authors: [pubkeyHex], limit: 1 };
-    const event = await new Promise<Event | null>((resolve, reject) => {
-      const sub = relayToUse!.subscribe([filter], {
-        onevent: (event: Event) => {
-          resolve(event);
-          sub.close();
-        },
-        oneose: () => {
-          resolve(null); // EOSE means no event found
-          sub.close();
-        },
-        // TODO: Add onclosed, onerror?
-      });
-      setTimeout(() => {
-        sub.close();
-        reject(new Error('Profile fetch timed out'));
-      }, PROFILE_FETCH_TIMEOUT_MS);
-    });
-
-    if (event && event.kind === 0) {
-      const profileContent = JSON.parse(event.content);
-      return {
-        npub: npub, // ensure npub is part of the returned object
-        name: profileContent.name || profileContent.display_name || profileContent.displayName,
-        picture: profileContent.picture,
-        about: profileContent.about,
-        nip05: profileContent.nip05,
-        // Potentially add: website, lud06, lud16 from profileContent
-      };
+    // nostrService.fetchEvents will use SimplePool.list()
+    // SimplePool.list usually returns the most recent events first by default if supported by relays.
+    // We ask for one event, expecting it to be the latest kind 0.
+    const events = await nostrService.fetchEvents([filter]);
+    if (events && events.length > 0) {
+      // Assuming the first event is the latest/most relevant due to limit:1 and typical relay behavior
+      const event = events.sort((a,b) => b.created_at - a.created_at)[0];
+      if (event.kind === 0) {
+        const profileContent = JSON.parse(event.content);
+        return {
+          npub: npub,
+          name: profileContent.name || profileContent.display_name || profileContent.displayName,
+          picture: profileContent.picture,
+          about: profileContent.about,
+          nip05: profileContent.nip05,
+          // Other NIP-01 fields can be extracted here
+        };
+      }
     }
+    console.log(`No kind 0 profile event found for ${npub} on configured relays.`);
     return null;
   } catch (error) {
-    console.error(`Error fetching profile for ${npub} from ${relayToUse.url}:`, error);
+    console.error(`Error fetching profile for ${npub} from relays:`, error);
     return null;
-  } finally {
-    if (tempRelay && relayToUse) {
-      await relayToUse.close();
-    }
   }
 };
 
-// Helper to convert NIP-05 to npub (basic, needs more robust validation and error handling)
-// This is a placeholder for more complex NIP-05 resolution logic
-export const resolveNip05ToNpub = async (nip05Identifier: string, relayUrl?: string): Promise<string | null> => {
+// Verifies NIP-05 identifier and returns the pubkey if valid
+export const verifyNip05 = async (npubToVerify: string, nip05Identifier: string): Promise<{verified: boolean, pubkeyHex?: string | null}> => {
+  if (!nip05Identifier || !nip05Identifier.includes('@')) {
+    return { verified: false, pubkeyHex: null };
+  }
+
+  try {
+    const profile = await nip05QueryProfile(nip05Identifier); // Uses nostr-tools/nip05
+    if (profile && profile.pubkey) {
+      const expectedPubkeyHex = nostrService.npubToHex(npubToVerify);
+      if (profile.pubkey === expectedPubkeyHex) {
+        console.log(`NIP-05 verified for ${nip05Identifier} (pubkey: ${profile.pubkey})`);
+        return { verified: true, pubkeyHex: profile.pubkey };
+      } else {
+        console.warn(`NIP-05 mismatch for ${nip05Identifier}: expected ${expectedPubkeyHex}, got ${profile.pubkey}`);
+        return { verified: false, pubkeyHex: profile.pubkey };
+      }
+    } else {
+      console.warn(`NIP-05 lookup failed for ${nip05Identifier} or no pubkey returned.`);
+      return { verified: false, pubkeyHex: null };
+    }
+  } catch (error) {
+    console.error(`Error verifying NIP-05 ${nip05Identifier}:`, error);
+    return { verified: false, pubkeyHex: null };
+  }
+};
+
+
+// Old resolveNip05ToNpub, can be deprecated or refactored to use verifyNip05
+export const resolveNip05ToNpub = async (nip05Identifier: string): Promise<string | null> => {
   if (!nip05Identifier.includes('@')) return null;
   const [name, domain] = nip05Identifier.split('@');
 
