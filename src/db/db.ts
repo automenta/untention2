@@ -28,6 +28,18 @@ export interface Settings {
   encryptionSalt?: Uint8Array;
 }
 
+export interface NostrProfileNote extends Note {
+  npub: string; // npub (bech32 encoded public key)
+  name?: string; // NIP-01 name
+  picture?: string; // NIP-01 picture URL
+  about?: string; // NIP-01 about content
+  nip05?: string; // NIP-05 identifier
+  lastChecked?: Date; // Timestamp of last NIP-01 fetch attempt
+  // Other NIP-01 fields like website, lud16, etc., can be added as needed
+  // Re-uses title from Note for a local alias/display name
+  // Re-uses content from Note for local private notes about the profile
+}
+
 export interface LMCacheEntry {
   id?: number; // Auto-incrementing ID
   prompt: string; // The prompt sent to the LM
@@ -40,18 +52,25 @@ export class NotentionDexie extends Dexie {
   notes!: Table<Note>;
   settings!: Table<Settings>;
   lmCache!: Table<LMCacheEntry>;
+  nostrProfiles!: Table<NostrProfileNote>;
 
   constructor() {
     super('notentionDB');
     this.version(1).stores({
-      notes: '++id, title, *tags, createdAt, updatedAt, content', // Dexie will FTS 'title' and 'content'
-      settings: '++id', // Should only ever have one entry with id: 1
+      notes: '++id, title, *tags, createdAt, updatedAt, content',
+      settings: '++id',
     });
-    // Add new table in a new version
     this.version(2).stores({
       notes: '++id, title, *tags, createdAt, updatedAt, content',
       settings: '++id',
-      lmCache: '++id, prompt, model, timestamp' // Index prompt for potential lookups, timestamp for eviction
+      lmCache: '++id, prompt, model, timestamp'
+    });
+    // Add new nostrProfiles table in a new version
+    this.version(3).stores({
+      notes: '++id, title, *tags, createdAt, updatedAt, content',
+      settings: '++id',
+      lmCache: '++id, prompt, model, timestamp',
+      nostrProfiles: '++id, npub, name, *tags, createdAt, updatedAt, content, nip05, lastChecked' // Index npub for quick lookup
     });
   }
 

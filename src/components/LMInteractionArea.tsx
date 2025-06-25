@@ -1,191 +1,224 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowUpCircleIcon, StopCircleIcon, ExclamationTriangleIcon, InformationCircleIcon, InboxArrowDownIcon } from '@heroicons/react/24/outline';
+import { PaperAirplaneIcon, StopCircleIcon, SparklesIcon, ExclamationTriangleIcon, InformationCircleIcon, InboxArrowDownIcon } from '@heroicons/react/24/solid'; // Using solid for main action buttons
 import * as lmService from '../services/lmService';
-import * as lmCacheService from '../services/lmCacheService'; // Import cache service
-import { db } from '../db/db'; // For current model name
+import * as lmCacheService from '../services/lmCacheService';
+import { db } from '../db/db';
 import { useHotkeys } from 'react-hotkeys-hook';
 import ReactMarkdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/atom-one-dark.css'; // Ensure this CSS is imported for code highlighting
+import remarkGfm from 'remark-gfm';
+
 
 interface LMInteractionAreaProps {
-  // Context from the current note, could be used for more advanced prompting
   currentNoteContent?: string;
-  // Allow passing the whole note or specific parts for context
+}
+
+interface ChatMessage {
+  id: string; // Unique ID for each message for React key and updates
+  type: 'human' | 'ai' | 'tool_call' | 'tool_result' | 'error' | 'info';
+  content: string;
+  toolName?: string;
 }
 
 const LMInteractionArea: React.FC<LMInteractionAreaProps> = ({ currentNoteContent }) => {
   const [prompt, setPrompt] = useState<string>('');
-  const [streamingOutput, setStreamingOutput] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [inputTokenCount, setInputTokenCount] = useState<number>(0);
-  const [outputTokenCount, setOutputTokenCount] = useState<number>(0);
-  const [cachedEntryId, setCachedEntryId] = useState<number | null>(null); // To indicate if current output is from cache
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [inputTokens, setInputTokens] = useState<number>(0);
+  const [outputTokens, setOutputTokens] = useState<number>(0); // Tracks tokens for the current AI response being streamed/completed
+  const [isCachedResponse, setIsCachedResponse] = useState<boolean>(false);
 
-  const stopStreamingRef = useRef<(() => void) | null>(null);
-  const outputRef = useRef<HTMLDivElement>(null); // For auto-scrolling
-  const accumulatedResponseRef = useRef<string>(''); // To accumulate response before saving to cache
+  const stopStreamingFunc = useRef<(() => void) | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null); // For auto-scrolling
 
-  const calculateTokenCounts = useCallback(async () => {
-    const inTokens = await lmService.countTokens(prompt);
-    setInputTokenCount(inTokens);
-    const outTokens = await lmService.countTokens(streamingOutput);
-    setOutputTokenCount(outTokens);
-  }, [prompt, streamingOutput]);
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
-  useEffect(() => {
-    calculateTokenCounts();
-  }, [prompt, streamingOutput, calculateTokenCounts]);
+  useEffect(scrollToBottom, [chatHistory]);
 
-  useEffect(() => {
-    // Auto-scroll to bottom of output
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, [streamingOutput]);
 
   const handleSubmitPrompt = useCallback(async () => {
     if (!prompt.trim() || isLoading) return;
 
     setIsLoading(true);
-    setError(null);
-    setStreamingOutput('');
-    setOutputTokenCount(0);
-    setCachedEntryId(null);
-    accumulatedResponseRef.current = ''; // Reset accumulator
+    setIsCachedResponse(false);
+    const humanMessageId = `human-${Date.now()}`;
+    setChatHistory(prev => [...prev, { id: humanMessageId, type: 'human', content: prompt }]);
+
+    const currentPrompt = prompt; // Capture prompt at time of submission
+    setPrompt(''); // Clear input field immediately
 
     const settings = await db.settings.get(1);
-    const currentModel = settings?.lmModel || 'unknown';
+    const currentModel = settings?.lmModel || 'unknown_model';
 
-    // 1. Check cache first
-    const cachedResponse = await lmCacheService.getLMCacheByPrompt(prompt, currentModel);
-    if (cachedResponse) {
-      setStreamingOutput(cachedResponse.response);
-      setCachedEntryId(cachedResponse.id || null); // Mark as cached
+    // Check cache
+    const cached = await lmCacheService.getLMCacheByPrompt(currentPrompt, currentModel);
+    if (cached) {
+      setChatHistory(prev => [...prev, { id: `ai-cached-${Date.now()}`, type: 'ai', content: cached.response }]);
+      setIsCachedResponse(true);
+      setInputTokens(await lmService.countTokens(currentPrompt));
+      setOutputTokens(await lmService.countTokens(cached.response));
       setIsLoading(false);
-      calculateTokenCounts(); // Calculate tokens for cached response
-      // Optionally, add a small delay or user confirmation before using cached response
-      // For now, using it directly.
-      console.log("Using cached LM response for prompt:", prompt);
       return;
     }
 
-    // 2. If not in cache, fetch from LM
-    // Example: include part of the note content as context
-    // This is a very basic MCP example. More complex orchestration would happen in lmService.
-    const fullPrompt = currentNoteContent
-      ? `Context from current note:\n---\n${currentNoteContent.substring(0,1000)}...\n---\n\nUser Prompt: ${prompt}`
-      : prompt;
+    const systemContext = currentNoteContent
+        ? `Note Context:\n${currentNoteContent.substring(0,1000)}\n---\nUser query:`
+        : undefined;
+
+    const llmHistory = chatHistory
+      .filter(m => m.type === 'human' || m.type === 'ai')
+      .slice(-6) // last 3 turns
+      .map(m => ({ type: m.type, content: m.content }));
+
+    let currentAIResponseId = `ai-${Date.now()}`;
+    setChatHistory(prev => [...prev, { id: currentAIResponseId, type: 'ai', content: '' }]);
+    let accumulatedResponse = "";
+    let currentOutputTokens = 0;
+
+    setInputTokens(await lmService.countTokens(currentPrompt + (systemContext || '')));
 
     try {
-      stopStreamingRef.current = await lmService.streamGenerations(
-        fullPrompt,
-        "You are a helpful assistant integrated into a markdown note-taking app. Be concise and helpful. Format responses in Markdown.",
-        (chunk) => { // onChunk
-          setStreamingOutput((prev) => {
-            accumulatedResponseRef.current = prev + chunk;
-            return accumulatedResponseRef.current;
-          });
-        },
-        async () => { // onComplete
-          setIsLoading(false);
-          stopStreamingRef.current = null;
-          calculateTokenCounts(); // Final token count
-          // Save the complete response to cache
-          if (accumulatedResponseRef.current.trim()) {
-            await lmCacheService.addLMCacheEntry(prompt, accumulatedResponseRef.current, currentModel);
-            console.log("LM response saved to cache.");
+      stopStreamingFunc.current = await lmService.streamLLMResponse(
+        currentPrompt,
+        systemContext,
+        llmHistory,
+        async (chunk, type) => { // onChunk
+          setIsLoading(true); // Keep loading true while chunks arrive
+          if (type === 'content') {
+            accumulatedResponse += chunk;
+            currentOutputTokens = await lmService.countTokens(accumulatedResponse); // Update output tokens as content streams
+            setOutputTokens(currentOutputTokens);
+            setChatHistory(prev => prev.map(msg => msg.id === currentAIResponseId ? { ...msg, content: accumulatedResponse } : msg));
+          } else {
+            // For tool calls, results, errors, info, add them as separate messages
+            setChatHistory(prev => [...prev, { id: `${type}-${Date.now()}`, type, content: chunk }]);
           }
         },
-        (err) => { // onError
-          setError(`LM Error: ${err.message}`);
-          console.error("LM Service Error:", err);
+        async (finalFullResponse, finalType) => { // onStop
           setIsLoading(false);
-          stopStreamingRef.current = null;
+          stopStreamingFunc.current = null;
+          if (finalType === 'error') {
+            setChatHistory(prev => prev.map(msg => msg.id === currentAIResponseId ? { ...msg, type: 'error', content: finalFullResponse } : msg));
+          } else {
+             // Ensure the final AI message is updated if it wasn't through chunks (e.g. agent's final output)
+            if (accumulatedResponse !== finalFullResponse) {
+                 setChatHistory(prev => prev.map(msg => msg.id === currentAIResponseId ? { ...msg, content: finalFullResponse } : msg));
+                 accumulatedResponse = finalFullResponse;
+            }
+            currentOutputTokens = await lmService.countTokens(accumulatedResponse);
+            setOutputTokens(currentOutputTokens);
+            if (accumulatedResponse.trim() && !isCachedResponse) { // Don't re-cache if it was just loaded from cache
+              await lmCacheService.addLMCacheEntry(currentPrompt, accumulatedResponse, currentModel);
+            }
+          }
         }
       );
     } catch (e: any) {
-      setError(`Setup Error: ${e.message}`);
       setIsLoading(false);
+      const errorMsgContent = `Setup Error: ${e.message}`;
+      // Try to update the current AI message to be an error, or add a new one
+      setChatHistory(prev => {
+        const currentAIMsgIndex = prev.findIndex(m => m.id === currentAIResponseId);
+        if (currentAIMsgIndex !== -1) {
+          return prev.map(msg => msg.id === currentAIResponseId ? { ...msg, type: 'error', content: errorMsgContent } : msg);
+        }
+        return [...prev, { id: `error-${Date.now()}`, type: 'error', content: errorMsgContent }];
+      });
     }
-  }, [prompt, isLoading, currentNoteContent, calculateTokenCounts]);
+  }, [prompt, isLoading, currentNoteContent, chatHistory, isCachedResponse]);
 
   const handleStopGeneration = () => {
-    if (stopStreamingRef.current) {
-      stopStreamingRef.current();
-      stopStreamingRef.current = null; // Ensure it's cleared
+    if (stopStreamingFunc.current) {
+      stopStreamingFunc.current(); // This should trigger AbortController in lmService
     }
-    setIsLoading(false);
-    // Token counts will be updated by useEffect on streamingOutput change
+    // isLoading state will be managed by onStop/onError callbacks from streamLLMResponse
   };
 
-  useHotkeys('ctrl+enter', (e) => {
-    // Check if focus is within this component or a specific input if needed
-    e.preventDefault();
-    handleSubmitPrompt();
-  }, { enableOnFormTags: ['textarea']});
+  useHotkeys('ctrl+enter, meta+enter', handleSubmitPrompt, { enableOnFormTags: ['textarea'] }, [handleSubmitPrompt]);
 
+  const getMessageStyle = (type: ChatMessage['type']) => {
+    // Tailwind styles for messages
+    switch (type) {
+      case 'human': return 'bg-blue-500 text-white dark:bg-blue-600 self-end';
+      case 'ai': return 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-200 self-start';
+      case 'tool_call': return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 self-start text-xs p-1.5 border border-purple-300 dark:border-purple-700';
+      case 'tool_result': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 self-start text-xs p-1.5 border border-green-300 dark:border-green-700';
+      case 'error': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 self-start border border-red-300 dark:border-red-700';
+      case 'info': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200 self-start text-xs p-1.5 border border-yellow-300 dark:border-yellow-700';
+      default: return 'bg-gray-500 text-white self-start';
+    }
+  };
+
+  const getMessageIcon = (type: ChatMessage['type'], toolName?: string) => {
+    const iconClass = "h-4 w-4 mr-1.5 inline-block flex-shrink-0";
+    if (type === 'tool_call') return <SparklesIcon className={`${iconClass} text-purple-500`} title={`Tool: ${toolName || 'Unknown'}`}/>;
+    if (type === 'tool_result') return <SparklesIcon className={`${iconClass} text-green-500`} />;
+    if (type === 'error') return <ExclamationTriangleIcon className={`${iconClass} text-red-500`} />;
+    if (type === 'info') return <InformationCircleIcon className={`${iconClass} text-yellow-500`} />;
+    return null;
+  }
 
   return (
-    <div className="flex flex-col h-full p-4 bg-gray-50 dark:bg-gray-800 border-t dark:border-gray-200 dark:dark:border-gray-700">
-      <h3 className="text-lg font-semibold mb-2 text-gray-700 dark:text-gray-200">Language Model Assistant</h3>
+    <div className="flex flex-col h-full p-3 bg-gray-100 dark:bg-gray-850 border-t dark:border-gray-700/50">
+      <div ref={messagesEndRef} className="flex-grow mb-2 space-y-3 overflow-y-auto pr-1">
+        {chatHistory.map((msg) => (
+          <div key={msg.id} className={`flex ${msg.type === 'human' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[90%] md:max-w-[80%] p-2.5 rounded-lg shadow-sm ${getMessageStyle(msg.type)} flex items-start`}>
+              {getMessageIcon(msg.type, msg.toolName)}
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
+                        className="prose dark:prose-invert prose-sm max-w-none leading-relaxed flex-grow min-w-0">
+                {msg.content + ((isLoading && msg.type === 'ai' && chatHistory.slice(-1)[0]?.id === msg.id && msg.content) ? '▍' : '')}
+              </ReactMarkdown>
+            </div>
+          </div>
+        ))}
+        {isLoading && chatHistory.slice(-1)[0]?.type !== 'ai' && (
+             <div className="flex justify-start">
+                <div className={`max-w-[90%] md:max-w-[80%] p-2.5 rounded-lg shadow-sm ${getMessageStyle('ai')}`}>
+                    <span className="inline-block w-2 h-4 bg-gray-800 dark:bg-gray-200 animate-pulse ml-1"></span>
+                </div>
+            </div>
+        )}
+        <div /> {/* Invisible div to ensure messagesEndRef can scroll to the very bottom */}
+      </div>
 
-      {/* Prompt Input Area */}
-      <div className="relative mb-2">
+      <div className="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400 mb-1 px-1">
+        <span>Input: {inputTokens} tokens</span>
+        {isCachedResponse && <span className="flex items-center text-blue-500 dark:text-blue-400"><InboxArrowDownIcon className="h-3.5 w-3.5 mr-1"/>Cached</span>}
+        <span>Output: {outputTokens} tokens</span>
+      </div>
+
+      <div className="flex items-end space-x-2">
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Ask the LM... (Ctrl+Enter to submit)"
-          rows={3}
-          className="w-full p-2 pr-10 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:placeholder-gray-400 resize-none"
-          disabled={isLoading}
+          placeholder="Interact with LM... (Ctrl+Enter or Cmd+Enter)"
+          className="flex-grow p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm resize-none focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-750 dark:text-white text-sm"
+          rows={Math.min(6, Math.max(1, (prompt.match(/\n/g) || []).length + 2, Math.floor(prompt.length / 60) + 1))}
+          disabled={isLoading && !stopStreamingFunc.current}
+          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleSubmitPrompt(); }}}
         />
-        <button
-          onClick={handleSubmitPrompt}
-          disabled={isLoading || !prompt.trim()}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 disabled:text-gray-400 dark:disabled:text-gray-500"
-          title="Submit Prompt (Ctrl+Enter)"
-        >
-          <ArrowUpCircleIcon className="h-6 w-6" />
-        </button>
-      </div>
-
-      {/* Controls and Info */}
-      <div className="flex justify-between items-center mb-2 text-xs text-gray-500 dark:text-gray-400">
-        <div>
-          <span>Input Tokens: {inputTokenCount}</span>
-          <span className="mx-2">|</span>
-          <span>Output Tokens: {outputTokenCount}</span>
-        </div>
-        {isLoading && (
+        {isLoading ? (
           <button
             onClick={handleStopGeneration}
-            className="flex items-center px-2 py-1 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+            className="p-2.5 text-white bg-red-600 hover:bg-red-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:opacity-50"
             title="Stop Generation"
+            disabled={!stopStreamingFunc.current}
           >
-            <StopCircleIcon className="h-5 w-5 mr-1" />
-            Stop
+            <StopCircleIcon className="h-5 w-5" />
           </button>
-        )}
-      </div>
-
-      {/* Streaming Output Area */}
-      <div ref={outputRef} className="flex-1 p-3 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md overflow-y-auto prose dark:prose-invert max-w-none relative">
-        {error && (
-          <div className="p-3 my-2 text-sm text-red-700 bg-red-100 rounded-md dark:bg-red-900 dark:text-red-300 flex items-center">
-            <ExclamationTriangleIcon className="h-5 w-5 mr-2"/>
-            {error}
-          </div>
-        )}
-        {cachedEntryId && !isLoading && !error && (
-          <div className="absolute top-2 right-2 flex items-center text-xs text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded-full" title={`This response was loaded from cache (Entry ID: ${cachedEntryId}).`}>
-            <InboxArrowDownIcon className="h-4 w-4 mr-1"/>
-            Cached
-          </div>
-        )}
-        {streamingOutput ? (
-          <ReactMarkdown>{streamingOutput}</ReactMarkdown>
         ) : (
-          <p className="text-gray-400 dark:text-gray-500 italic">LM output will appear here...</p>
+          <button
+            onClick={handleSubmitPrompt}
+            className="p-2.5 text-white bg-blue-600 hover:bg-blue-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            title="Send Prompt (Ctrl+Enter or Cmd+Enter)"
+            disabled={!prompt.trim()}
+          >
+            <PaperAirplaneIcon className="h-5 w-5" />
+          </button>
         )}
       </div>
     </div>

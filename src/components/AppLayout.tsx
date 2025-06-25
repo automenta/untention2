@@ -1,299 +1,190 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import Sidebar from './Sidebar';
+import React from 'react';
+import Sidebar, { SidebarProps } from './Sidebar';
 import MarkdownEditor from './MarkdownEditor';
-import { Note, db, Settings } from '../db/db';
-import * as noteService from '../services/noteService';
-import * as settingsService from '../services/settingsService';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { useHotkeys } from 'react-hotkeys-hook';
-import sanitizeHtml from 'sanitize-html';
+import SettingsPage from './SettingsPage';
 import LMInteractionArea from './LMInteractionArea';
-import SettingsPage from './SettingsPage'; // Import the SettingsPage component
-import ShareModal from './ShareModal'; // Import the ShareModal component
+import { Note, NostrProfileNote } from '../db/db';
+import { Bars3Icon, XMarkIcon as MenuCloseIcon, ShareIcon, DocumentPlusIcon } from '@heroicons/react/24/outline';
+import ShareModal from './ShareModal';
 
+// Define a more specific type for activeView in App.tsx and pass it down
+export type ActiveViewType =
+  | { type: 'note'; id: number | null }
+  | { type: 'profile'; id: number | null }
+  | { type: 'settings' }
+  | { type: 'new_note_editor' }
+  | { type: 'new_profile_editor' }; // Though new_profile_editor might just open a modal
 
-import { Bars3Icon, XMarkIcon as MenuCloseIcon } from '@heroicons/react/24/outline'; // For menu toggle
+interface MainContentProps {
+  activeView: ActiveViewType;
+  currentNote: Note | NostrProfileNote | null; // Can be a regular note or a profile note
+  isEditing: boolean;
+  onSaveNote: (id: number | undefined, title: string, content: string, tags: string[]) => void;
+  onDeleteNoteOrProfile: (id: number) => void;
+  onSetIsEditing: (editing: boolean) => void;
+  onExitSettings: () => void; // To go back from settings page
+  editorKey: string; // For MarkdownEditor re-mount
+  ProfileViewComponent: React.FC<any>; // Specific props for NostrProfileView will be spread
+  onEditProfileLocalFields: (profileId: number) => void;
+  onRefetchProfileData: (npub: string) => void;
+}
 
-const AppLayout: React.FC = () => {
-  const [currentNoteId, setCurrentNoteId] = useState<number | null>(null);
-  const [currentNoteContent, setCurrentNoteContent] = useState<string>('');
-  const [currentNoteTitle, setCurrentNoteTitle] = useState<string>('');
-  const [currentNoteTags, setCurrentNoteTags] = useState<string[]>([]);
+interface AppLayoutProps {
+  sidebar: SidebarProps;
+  mainContent: MainContentProps;
+  onToggleSidebar: () => void;
+}
 
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState<boolean>(false); // For toggling settings view
-  const [showShareModal, setShowShareModal] = useState<boolean>(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // For mobile sidebar toggle
+const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSidebar }) => {
+  const [isShareModalOpen, setIsShareModalOpen] = React.useState(false);
 
-  const notes = useLiveQuery(
-    () => {
-      if (selectedTag) return noteService.getNotesByTag(selectedTag);
-      if (searchTerm) return noteService.searchNotes(searchTerm);
-      return noteService.getAllNotes('updatedAt', true);
-    },
-    [searchTerm, selectedTag],
-    [] // Default value
-  ) as Note[] | undefined;
+  const {
+    activeView,
+    currentNote, // This is the item to be displayed or edited
+    isEditing,
+    onSaveNote,
+    onDeleteNoteOrProfile,
+    // onSetIsEditing, // Might not be needed if editor visibility is derived
+    onExitSettings,
+    editorKey,
+    ProfileViewComponent,
+    onEditProfileLocalFields,
+    onRefetchProfileData,
+  } = mainContent;
 
-  const allTags = useLiveQuery(noteService.getAllTags, [], []) as string[] | undefined;
-  const settings = useLiveQuery(settingsService.getSettings, []) as Settings | undefined;
+  const itemToDisplayOrEdit = currentNote as NostrProfileNote | Note | null;
 
-  useEffect(() => {
-    if (settings?.theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+  const isProfileActive = activeView.type === 'profile' && itemToDisplayOrEdit && 'npub' in itemToDisplayOrEdit;
+  const isNoteActive = (activeView.type === 'note' || activeView.type === 'new_note_editor') && (itemToDisplayOrEdit || activeView.type === 'new_note_editor');
+
+  // Show editor if:
+  // 1. A regular note is active and we are in editing state.
+  // 2. A new note is being created.
+  // 3. A profile is active AND we are specifically editing its local fields.
+  const showEditor = (isNoteActive && isEditing) || (isProfileActive && isEditing);
+
+  let pageTitle = "Notention";
+  if (activeView.type === 'settings') {
+    pageTitle = "Settings";
+  } else if (itemToDisplayOrEdit) {
+    pageTitle = itemToDisplayOrEdit.title || (isProfileActive ? (itemToDisplayOrEdit as NostrProfileNote).name || 'Profile' : 'Untitled Note');
+  } else if (activeView.type === 'new_note_editor') {
+    pageTitle = "New Note";
+  }
+
+  const handleDelete = () => {
+    if (itemToDisplayOrEdit?.id) {
+      onDeleteNoteOrProfile(itemToDisplayOrEdit.id);
     }
-  }, [settings?.theme]);
-
-  const loadNote = useCallback(async (id: number) => {
-    const note = await noteService.getNoteById(id);
-    if (note) {
-      setCurrentNoteId(note.id!);
-      setCurrentNoteTitle(note.title);
-      setCurrentNoteContent(note.content);
-      setCurrentNoteTags(note.tags);
-      setShowSettings(false); // Switch out of settings view if a note is loaded
-    }
-  }, []);
-
-  useEffect(() => {
-    // Load first note by default or if current note is deleted/filtered out
-    if (notes && notes.length > 0 && (!currentNoteId || !notes.find(n => n.id === currentNoteId))) {
-      loadNote(notes[0].id!);
-    } else if (notes && notes.length === 0) {
-      // No notes, clear editor
-      setCurrentNoteId(null);
-      setCurrentNoteTitle('');
-      setCurrentNoteContent('');
-      setCurrentNoteTags([]);
-    }
-  }, [notes, currentNoteId, loadNote]);
-
-  const handleCreateNewNote = async () => {
-    const newNoteId = await noteService.createNote('Untitled Note', '');
-    if (notes && notes.length === 0) { // if it's the very first note
-       await loadNote(newNoteId);
-    } // else, the new note will appear at the top and useEffect will handle loading it.
-    setSelectedTag(null); // Clear tag filter
-    setSearchTerm(''); // Clear search
   };
 
-  const debouncedSaveNote = useCallback(
-    // Basic debounce
-    (() => {
-      let timer: NodeJS.Timeout;
-      return (id: number, title: string, content: string, tags: string[]) => {
-        clearTimeout(timer);
-        timer = setTimeout(async () => {
-          if (id) {
-            await noteService.updateNote(id, { title, content, tags });
-          }
-        }, 1000); // Auto-save after 1 second of inactivity
-      };
-    })(),
-    []
-  );
-
-  useEffect(() => {
-    if (currentNoteId) {
-      debouncedSaveNote(currentNoteId, currentNoteTitle, currentNoteContent, currentNoteTags);
-    }
-  }, [currentNoteTitle, currentNoteContent, currentNoteTags, currentNoteId, debouncedSaveNote]);
-
-  const handleContentChange = (content: string) => {
-    setCurrentNoteContent(content);
-  };
-
-  const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCurrentNoteTitle(e.target.value);
-  };
-
-  const handleTagsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Simple comma-separated tags for now
-    const tagsArray = e.target.value.split(',').map(tag => tag.trim()).filter(tag => tag !== '');
-    setCurrentNoteTags(tagsArray);
-  };
-
-  const handleExportNote = (format: 'md' | 'json') => {
-    if (!currentNoteId) return;
-    const noteToExport = { title: currentNoteTitle, content: currentNoteContent, tags: currentNoteTags, createdAt: new Date(), updatedAt: new Date() }; // Mock dates for export
-
-    let dataStr;
-    let filename;
-
-    if (format === 'md') {
-      dataStr = `# ${noteToExport.title}\n\nTags: ${noteToExport.tags.join(', ')}\n\n${noteToExport.content}`;
-      filename = `${noteToExport.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'note'}.md`;
-    } else { // json
-      dataStr = JSON.stringify(noteToExport, null, 2);
-      filename = `${noteToExport.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'note'}.json`;
-    }
-
-    const blob = new Blob([dataStr], { type: format === 'md' ? 'text/markdown' : 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  // Hotkeys
-  useHotkeys('ctrl+s', (e) => {
-    e.preventDefault();
-    if (currentNoteId) {
-      noteService.updateNote(currentNoteId, { title: currentNoteTitle, content: currentNoteContent, tags: currentNoteTags });
-      // Could add a small "Saved!" notification here
-    }
-  }, { enableOnFormTags: ['input', 'textarea'] }, [currentNoteId, currentNoteTitle, currentNoteContent, currentNoteTags]);
-
-  useHotkeys('ctrl+t', (e) => {
-    e.preventDefault();
-    handleCreateNewNote();
-  }, { enableOnFormTags: ['input', 'textarea'] });
-
-  // Ctrl+Enter for LM prompt (to be implemented later)
-  // useHotkeys('ctrl+enter', () => { /* ... */ }, { enableOnFormTags: ['textarea'] });
-
-  const currentView = () => {
-    if (showSettings) {
-      return <SettingsPage />;
-    }
-
-    if (currentNoteId === null && (!notes || notes.length === 0)) {
-        return (
-            <div className="flex-1 p-8 flex flex-col items-center justify-center text-center">
-                <DocumentTextIcon className="h-16 w-16 text-gray-400 mb-4" />
-                <h2 className="text-xl font-medium text-gray-600 dark:text-gray-300">No notes yet</h2>
-                <p className="text-gray-500 dark:text-gray-400 mb-4">Create a new note to get started.</p>
-                <button
-                    onClick={handleCreateNewNote}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
-                >
-                    Create Note
-                </button>
-            </div>
-        );
-    }
-
-    if (currentNoteId === null && notes && notes.length > 0) {
-        return (
-             <div className="flex-1 p-8 flex flex-col items-center justify-center">
-                <p className="text-gray-500 dark:text-gray-400">Select a note to view or edit.</p>
-            </div>
-        );
-    }
-
-
-    return (
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
-        {/* Editor Area */}
-        <div className="p-4 border-b dark:border-gray-700">
-          <input
-            type="text"
-            value={currentNoteTitle}
-            onChange={handleTitleChange}
-            placeholder="Note Title"
-            className="w-full text-2xl font-semibold bg-transparent focus:outline-none pb-2 dark:text-white"
-          />
-          <input
-            type="text"
-            value={currentNoteTags.join(', ')}
-            onChange={handleTagsChange}
-            placeholder="Tags (comma-separated)"
-            className="w-full text-sm bg-transparent focus:outline-none text-gray-500 dark:text-gray-400"
-          />
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          <MarkdownEditor
-            value={currentNoteContent}
-            onChange={handleContentChange}
-            placeholder="Start writing your note..."
-          />
-        </div>
-        <div className="p-2 border-t dark:border-gray-700 flex justify-end space-x-2">
-            <button
-                onClick={() => handleExportNote('md')}
-                className="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 rounded"
-            >
-                Export MD
-            </button>
-            <button
-                onClick={() => handleExportNote('json')}
-                className="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 rounded"
-            >
-                Export JSON
-            </button>
-            <button
-                onClick={() => setShowShareModal(true)}
-                className="px-3 py-1 text-xs text-white bg-purple-600 hover:bg-purple-700 rounded disabled:opacity-50"
-                disabled={!currentNoteId}
-                title="Share via Nostr"
-            >
-                Share
-            </button>
-        </div>
-
-        {/* LM Interaction Area */}
-        <div className="h-1/3 min-h-[200px] flex-shrink-0"> {/* Ensure it has a minimum height and doesn't shrink too much */}
-          <LMInteractionArea currentNoteContent={currentNoteContent} />
-        </div>
-      </div>
-    );
-  };
-
+  const canShare = activeView.type === 'note' && itemToDisplayOrEdit && itemToDisplayOrEdit.id && !('npub' in itemToDisplayOrEdit);
 
   return (
-    <div className="flex h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white overflow-hidden">
-      {/* Mobile Menu Button - positioned over the content area */}
-      <button
-        className="md:hidden fixed top-4 left-4 z-40 p-2 bg-gray-100 dark:bg-gray-700 rounded-md text-gray-600 dark:text-gray-300"
-        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+    <div className="flex h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 overflow-hidden">
+      {/* Mobile Menu Button - standard position */}
+       <button
+        className="md:hidden fixed top-3 left-3 z-40 p-2 bg-gray-200 dark:bg-gray-700 rounded-md text-gray-700 dark:text-gray-200 shadow"
+        onClick={onToggleSidebar}
       >
-        {isSidebarOpen ? <MenuCloseIcon className="h-6 w-6" /> : <Bars3Icon className="h-6 w-6" />}
+        {sidebar.isOpen ? <MenuCloseIcon className="h-5 w-5" /> : <Bars3Icon className="h-5 w-5" />}
       </button>
 
-      <Sidebar
-        notes={notes || []}
-        tags={allTags || []}
-        selectedNoteId={currentNoteId}
-        onSelectNote={loadNote}
-        onCreateNewNote={handleCreateNewNote}
-        onSelectTag={(tag) => { setSelectedTag(tag || null); setSearchTerm(''); setShowSettings(false); }}
-        selectedTag={selectedTag}
-        onShowSettings={() => { setShowSettings(true); setCurrentNoteId(null); setIsSidebarOpen(false);}}
-        onSearchChange={(term) => { setSearchTerm(term); setSelectedTag(null); setShowSettings(false); }}
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-      />
+      <Sidebar {...sidebar} />
+
       {/* Overlay for mobile when sidebar is open */}
-      {isSidebarOpen && (
+      {sidebar.isOpen && (
         <div
           className="fixed inset-0 z-20 bg-black opacity-50 md:hidden"
-          onClick={() => setIsSidebarOpen(false)}
+          onClick={sidebar.onClose} // Use onClose from sidebar props
         ></div>
       )}
-      <main className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${isSidebarOpen ? 'md:ml-0' : 'md:ml-0'}`}> {/* Adjust margin if sidebar pushes content: ml-0 md:ml-64 if sidebar is not fixed on md */}
-        {/* Add padding to main content if menu button is fixed and might overlap */}
-        <div className="pt-12 md:pt-0 flex-1 flex flex-col overflow-hidden">
-            {currentView()}
+
+      <main className={`flex-1 flex flex-col overflow-hidden transition-transform duration-300 ease-in-out md:ml-0 ${sidebar.isOpen && window.innerWidth < 768 ? 'translate-x-64' : ''}`}>
+        {/* Header for mobile, containing title and potentially share button */}
+        <div className="bg-white dark:bg-gray-800 shadow-sm md:hidden p-3 flex justify-between items-center border-b dark:border-gray-700 min-h-[57px]">
+          {/* Placeholder for menu button alignment, actual button is fixed */}
+          <div className="w-8 h-8"></div>
+          <span className="text-lg font-semibold text-gray-700 dark:text-gray-200 truncate px-2">
+            {pageTitle}
+          </span>
+          {canShare ? (
+            <button
+              onClick={() => setIsShareModalOpen(true)}
+              className="p-1 text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+              title="Share Note"
+            >
+              <ShareIcon className="h-5 w-5" />
+            </button>
+          ) : <div className="w-8 h-5"></div> /* Placeholder for alignment */}
+        </div>
+
+        {/* Main content area */}
+        <div className="flex-1 overflow-y-auto bg-white dark:bg-gray-800"> {/* Ensure this takes up space */}
+          {activeView.type === 'settings' && <SettingsPage onExit={onExitSettings} />}
+
+          {showEditor && (
+            <div className="h-full flex flex-col"> {/* Ensure editor container takes full height */}
+              <MarkdownEditor
+                key={editorKey}
+                note={itemToDisplayOrEdit}
+                onSave={onSaveNote}
+                onDelete={itemToDisplayOrEdit?.id ? handleDelete : undefined}
+                onShare={canShare ? () => setIsShareModalOpen(true) : undefined}
+                isProfileEditing={isProfileActive && isEditing}
+              />
+              {/* LM Interaction only for actual notes or when editor is up for a new note (not for profile's local notes) */}
+              {isNoteActive && !isProfileActive &&
+                <div className="h-1/3 min-h-[200px] flex-shrink-0 border-t dark:border-gray-700">
+                    <LMInteractionArea currentNoteContent={itemToDisplayOrEdit?.content || ''} />
+                </div>
+              }
+            </div>
+          )}
+
+          {isProfileActive && !isEditing && itemToDisplayOrEdit && (
+            <ProfileViewComponent
+              profile={itemToDisplayOrEdit as NostrProfileNote}
+              onEditLocalFields={onEditProfileLocalFields}
+              onDelete={(profileId: number) => onDeleteNoteOrProfile(profileId)}
+              onRefetchProfile={onRefetchProfileData}
+            />
+          )}
+
+          {!itemToDisplayOrEdit && activeView.type !== 'settings' && activeView.type !== 'new_note_editor' && (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400 h-full flex flex-col justify-center items-center">
+              <DocumentPlusIcon className="h-12 w-12 text-gray-400 mb-3"/>
+              <p className="mb-3">Select an item from the sidebar or create something new.</p>
+              <div className="space-x-2">
+                <button
+                    onClick={sidebar.onCreateNewNote}
+                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                >
+                    New Note
+                </button>
+                {sidebar.onCreateNewProfile && (
+                     <button
+                        onClick={sidebar.onCreateNewProfile}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
+                    >
+                        Add Nostr Contact
+                    </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </main>
-      {currentNoteId && showShareModal && (
+
+      {isShareModalOpen && itemToDisplayOrEdit && canShare && (
         <ShareModal
-          noteTitle={currentNoteTitle}
-          noteContent={currentNoteContent}
-          noteTags={currentNoteTags}
-          isOpen={showShareModal}
-          onClose={() => setShowShareModal(false)}
-          onShared={(eventId) => {
-            console.log("Note shared with event ID:", eventId);
-            // Could add a small notification here
-          }}
+          // Pass only necessary fields for a Note to ShareModal
+          noteTitle={itemToDisplayOrEdit.title}
+          noteContent={itemToDisplayOrEdit.content}
+          noteTags={itemToDisplayOrEdit.tags}
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+           onShared={(eventId) => { console.log("Note shared with event ID:", eventId);}} // Placeholder
         />
       )}
     </div>

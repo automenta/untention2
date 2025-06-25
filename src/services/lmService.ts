@@ -1,192 +1,221 @@
 import { Ollama } from "@langchain/community/llms/ollama";
-import { ChatOpenAI } from "@langchain/openai";
+import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
-// Potentially ChatGoogleGenerativeAI for Gemini, if a direct LangChain JS integration is preferred.
-// For now, let's assume a generic interface or direct API calls for Gemini if ChatGoogleGenerativeAI is complex.
+import { BaseLanguageModel } from "@langchain/core/language_models/base";
+import { AIMessage, HumanMessage, SystemMessage, BaseMessage, AIMessageChunk } from "@langchain/core/messages";
+import { AgentExecutor, createToolCallingAgent, AgentStep } from "langchain/agents";
+import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
+import { Tool } from "@langchain/core/tools";
 
-import { StringOutputParser } from "@langchain/core/output_parsers";
-import { PromptTemplate } from "@langchain/core/prompts";
-import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import * as settingsService from "./settingsService";
+import { Settings } from "../db/db";
+import { getTools } from "./langchainToolsService";
 
-import { db } from '../db/db'; // For API keys, models from settings
-import * as settingsService from './settingsService'; // To get settings
+let llm: BaseLanguageModel | null = null;
+let agentExecutorInstance: AgentExecutor | null = null;
+let currentModelName: string | null = null;
+let currentSettingsSignature: string | null = null;
+let activeController: AbortController | null = null;
 
-// TODO: Implement proper API key encryption/decryption via settingsService
 
-interface LMConfig {
-  provider: 'openai' | 'anthropic' | 'ollama' | 'gemini'; // 'gemini' might be via a generic fetch
-  apiKey?: string;
-  modelName?: string;
-  ollamaBaseUrl?: string; // Specific to Ollama
+function generateSettingsSignature(settings: Settings | null, apiKey?: string): string {
+    if (!settings) return "no-settings";
+    return JSON.stringify({
+        lmModel: settings.lmModel,
+        ollamaBaseUrl: settings.ollamaBaseUrl,
+        apiKeyLength: apiKey?.length ?? 0,
+    });
 }
 
-// Simple cache for initialized models to avoid re-creating them on every call
-const modelCache: Record<string, any> = {};
+export const getLLM = (): BaseLanguageModel | null => llm;
 
-const getLMInstance = async () => {
-  const settings = await db.settings.get(1); // Assuming settings are always ID 1
-  if (!settings) throw new Error("Settings not found");
-
-  const provider = settings.lmModel?.startsWith('gpt-') ? 'openai' :
-                   settings.lmModel?.startsWith('claude-') ? 'anthropic' :
-                   settings.ollamaBaseUrl ? 'ollama' : // Use ollama if base URL is set
-                   null; // Add Gemini later
-
-  if (!provider && !settings.lmModel) throw new Error("LM provider or model not configured");
-
-  const cacheKey = `${provider}-${settings.lmModel}-${settings.ollamaBaseUrl}`;
-  if (modelCache[cacheKey]) return modelCache[cacheKey];
-
-  const apiKey = await settingsService.getLmApiKey();
-
-
-  let llm;
-
-  if (provider === 'ollama' && settings.ollamaBaseUrl) {
-    llm = new Ollama({
-      baseUrl: settings.ollamaBaseUrl,
-      model: settings.lmModel || "llama2", // Default ollama model if not specified
-    });
-  } else if (provider === 'openai' && settings.lmModel && apiKey) {
-    llm = new ChatOpenAI({
-      apiKey: apiKey,
-      modelName: settings.lmModel,
-      temperature: 0.7,
-      streaming: true,
-    });
-  } else if (provider === 'anthropic' && settings.lmModel && apiKey) {
-    llm = new ChatAnthropic({
-      apiKey: apiKey,
-      modelName: settings.lmModel,
-      temperature: 0.7,
-      streaming: true,
-    });
-  } else if (settings.lmModel?.includes('gemini')) { // Basic Gemini check
-    // Gemini might require a different setup, possibly using GoogleAIStudio SDK or a custom fetch.
-    // Placeholder for Gemini:
-    console.warn("Gemini integration is a placeholder. Requires specific SDK/API call structure.");
-    // For now, let's simulate a generic LLM-like interface if we were to use fetch.
-    // This part would need to be fleshed out based on LangChain's Google Generative AI support or direct API calls.
-    // For this example, we'll throw an error if Gemini is selected without full implementation.
-    throw new Error("Gemini provider selected but not fully implemented in LangChain setup yet.");
-  }
-  else {
-    throw new Error(`Unsupported LM provider or model not configured correctly: ${settings.lmModel}`);
-  }
-
-  modelCache[cacheKey] = llm;
-  return llm;
-};
-
-
-export const stream générations = async (
-  prompt: string,
-  systemMessageContent?: string,
-  onChunk: (chunk: string) => void,
-  onComplete: ()_=> void,
-  onError: (error: Error) => void
-): Promise<() => void> => { // Returns a stop function
-  try {
-    const llm = await getLMInstance();
-    const messages = [];
-    if (systemMessageContent) messages.push(new SystemMessage(systemMessageContent));
-    messages.push(new HumanMessage(prompt));
-
-    const stream = await llm.pipe(new StringOutputParser()).stream(messages);
-
-    let stopped = false;
-    const stop = () => { stopped = true; };
-
-    (async () => {
-      try {
-        for await (const chunk of stream) {
-          if (stopped) break;
-          onChunk(chunk as string);
-        }
-        if (!stopped) onComplete();
-      } catch (e) {
-        if (!stopped) onError(e as Error);
-      }
-    })();
-
-    return stop;
-
-  } catch (error) {
-    onError(error as Error);
-    return () => {}; // No-op stop function
-  }
-};
-
-
-// Example of a more complex chain with a prompt template (Tool Use & MCP will build on this)
-export const summarizeText = async (
-  textToSummarize: string,
-  onChunk: (chunk: string) => void,
-  onComplete: () => void,
-  onError: (error: Error)
-): Promise<() => void> => {
-  try {
-    const llm = await getLMInstance();
-    const prompt = PromptTemplate.fromTemplate(
-      "Please provide a concise summary of the following text:\n\n{text}"
-    );
-
-    // Simple chain: prompt -> model -> parser
-    const chain = prompt.pipe(llm).pipe(new StringOutputParser());
-
-    const stream = await chain.stream({ text: textToSummarize });
-
-    let stopped = false;
-    const stop = () => { stopped = true; };
-
-    (async () => {
-      try {
-        for await (const chunk of stream) {
-          if (stopped) break;
-          onChunk(chunk as string);
-        }
-        if (!stopped) onComplete();
-      } catch (e) {
-        if (!stopped) onError(e as Error);
-      }
-    })();
-
-    return stop;
-
-  } catch (error) {
-    onError(error as Error);
-    return () => {};
-  }
-};
-
-// Placeholder for token counting - this is highly model-dependent
-// LangChain itself doesn't provide a universal token counter for all models.
-// For OpenAI, you might use something like 'tiktoken'.
-// For others, it might be an estimate or API-provided.
-export const countTokens = async (text: string, modelName?: string): Promise<number> => {
-  const settings = await db.settings.get(1);
-  const effectiveModelName = modelName || settings?.lmModel;
-
-  if (effectiveModelName?.startsWith('gpt-')) {
-    // Dynamically import tiktoken only when needed and available
-    try {
-      const { getEncoding } = await import('tiktoken/lite/init');
-      // TODO: This path might need to be adjusted based on how tiktoken is bundled/available.
-      // It might require wasm, so Vite config might need adjustment.
-      // For now, assume it can be dynamically imported.
-      // const encoding = getEncoding('cl100k_base'); // Common for gpt-3.5-turbo, gpt-4
-      // const tokens = encoding.encode(text);
-      // encoding.free();
-      // return tokens.length;
-      // Tiktoken via https://www.npmjs.com/package/@dqbd/tiktoken
-      // Using an approximation for now as full tiktoken setup is involved
-      return Math.ceil(text.length / 4); // Very rough approximation
-    } catch (e) {
-      console.warn("Tiktoken not available for token counting, using approximation.", e);
-      return Math.ceil(text.length / 4); // Fallback: average 4 chars per token
+async function initializeLLMAndAgent(): Promise<boolean> {
+    const settings = await settingsService.getSettings();
+    if (!settings?.lmModel) {
+        console.warn("LLM model not configured.");
+        llm = null;
+        agentExecutorInstance = null;
+        currentModelName = null;
+        currentSettingsSignature = null;
+        return false;
     }
-  }
-  // For other models, it's more complex. Ollama might provide it, Anthropic has its own way.
-  // This is a simplification.
-  return Math.ceil(text.length / 4); // Default approximation
+
+    const apiKey = await settingsService.getLmApiKey();
+    const newSettingsSignature = generateSettingsSignature(settings, apiKey || undefined);
+
+    if (llm && agentExecutorInstance && currentModelName === settings.lmModel && currentSettingsSignature === newSettingsSignature) {
+        return true; // Already initialized and settings haven't changed
+    }
+
+    currentModelName = settings.lmModel;
+    currentSettingsSignature = newSettingsSignature;
+    llm = null; // Force re-initialization of LLM
+    agentExecutorInstance = null; // And agent
+
+    console.log(`Initializing LLM: ${settings.lmModel}`);
+    try {
+        if (settings.lmModel.startsWith("gpt-")) {
+            if (!apiKey) throw new Error("OpenAI API key not set.");
+            llm = new ChatOpenAI({ modelName: settings.lmModel, apiKey, streaming: true, temperature: 0.7 });
+        } else if (settings.lmModel.startsWith("claude-")) {
+            if (!apiKey) throw new Error("Anthropic API key not set.");
+            llm = new ChatAnthropic({ modelName: settings.lmModel, apiKey, streaming: true, temperature: 0.7 });
+        } else if (settings.ollamaBaseUrl && settings.lmModel) {
+            llm = new Ollama({ baseUrl: settings.ollamaBaseUrl, model: settings.lmModel, temperature: 0.7 });
+        } else if (settings.lmModel.includes("gemini")) {
+            console.warn("Gemini model selected. Basic compatibility assumed if API key provided for ChatOpenAI-like behavior.");
+            if (apiKey) { // Attempt to use with OpenAI-like Chat Interface if possible
+                llm = new ChatOpenAI({ modelName: "gemini-pro", apiKey, streaming: true, temperature: 0.7}); // This is an assumption
+            } else {
+                throw new Error("Gemini model selected, but no API key provided or specific Google integration is missing.");
+            }
+        } else {
+            throw new Error(`Unsupported LLM model: ${settings.lmModel}`);
+        }
+        console.log("LLM Initialized:", llm.constructor.name);
+
+        // Initialize Agent
+        const tools = getTools();
+        if (llm instanceof ChatOpenAI || llm instanceof ChatAnthropic) { // Check if LLM supports tool calling
+            const prompt = ChatPromptTemplate.fromMessages([
+                ["system", "You are a helpful assistant. You have access to tools. Use them when appropriate. Respond to the user directly if no tools are needed or after tool execution."],
+                new MessagesPlaceholder("chat_history"),
+                ["human", "{input}"],
+                new MessagesPlaceholder("agent_scratchpad"),
+            ]);
+            const agent = await createToolCallingAgent({ llm, tools, prompt });
+            agentExecutorInstance = new AgentExecutor({ agent, tools, verbose: true });
+            console.log("AgentExecutor initialized with tools:", tools.map(t => t.name).join(', '));
+        } else {
+            console.warn(`LLM ${llm.constructor.name} may not support advanced tool calling agents. Tool usage will be limited or disabled.`);
+            // No agentExecutorInstance if LLM doesn't support it well. streamLLMResponse will fallback.
+        }
+        return true;
+    } catch (error) {
+        console.error("Failed to initialize LLM or Agent:", error);
+        llm = null;
+        agentExecutorInstance = null;
+        currentModelName = null;
+        currentSettingsSignature = null;
+        return false; // Initialization failed
+    }
+}
+
+export const streamLLMResponse = async (
+    input: string,
+    systemContext: string | undefined, // System context is now part of the agent's main prompt
+    chatHistory: Array<{ type: 'human' | 'ai' | 'system', content: string }> | undefined,
+    onChunk: (chunk: string, type: 'content' | 'tool_call' | 'tool_result' | 'error' | 'info') => void,
+    onStop: (fullResponse: string, finalResponseType: 'content' | 'error') => void,
+): Promise<() => void> => { // Returns a stop function
+
+    activeController = new AbortController();
+    const signal = activeController.signal;
+
+    const run = async () => {
+        const initialized = await initializeLLMAndAgent();
+        if (!initialized || !llm) {
+            const errMsg = "LLM not available or not configured.";
+            onChunk(errMsg, 'error');
+            onStop(errMsg, 'error');
+            return;
+        }
+
+        const messagesForHistory: BaseMessage[] = [];
+        if (chatHistory) {
+            chatHistory.forEach(msg => {
+                if (msg.type === 'human') messagesForHistory.push(new HumanMessage(msg.content));
+                else if (msg.type === 'ai') messagesForHistory.push(new AIMessage(msg.content));
+            });
+        }
+
+        let fullResponse = "";
+
+        try {
+            if (agentExecutorInstance) {
+                const stream = await agentExecutorInstance.stream({
+                    input: input,
+                    chat_history: messagesForHistory,
+                    // System message is part of the agent's prompt template
+                }, { signal });
+
+                for await (const chunk of stream) {
+                    if (signal.aborted) break;
+                    if (chunk.actions) { // Tool call
+                        chunk.actions.forEach((action: any) => { // LangSmith RunLogItem type for action
+                            onChunk(`Calling tool: ${action.tool} with input ${JSON.stringify(action.toolInput)}`, 'tool_call');
+                        });
+                    }
+                    if (chunk.steps) { // Tool result
+                        chunk.steps.forEach((step: AgentStep) => {
+                             onChunk(`Tool ${step.action.tool} result: ${step.observation}`, 'tool_result');
+                        });
+                    }
+                    if (chunk.output) { // Final agent output
+                        fullResponse += chunk.output;
+                        onChunk(chunk.output, 'content');
+                    }
+                     // Langchain's stream events can be complex. This is a simplified handler.
+                    // You might get other types of chunks depending on the agent and tools.
+                }
+            } else { // Fallback to basic LLM call if agent is not available (e.g., Ollama)
+                onChunk("Agent not available for this LLM, using basic response generation. Tools are disabled.", 'info');
+                const messages: BaseMessage[] = [...messagesForHistory];
+                if (systemContext) messages.unshift(new SystemMessage(systemContext)); // Add system if provided and no agent
+                messages.push(new HumanMessage(input));
+
+                const stream = await llm.stream(messages, { signal });
+                for await (const chunk of stream) {
+                    if (signal.aborted) break;
+                    const content = (chunk as AIMessageChunk).content as string;
+                    if (content) {
+                        fullResponse += content;
+                        onChunk(content, 'content');
+                    }
+                }
+            }
+            if (signal.aborted) {
+                onChunk("Stream stopped by user.", 'info');
+                onStop(fullResponse, 'content'); // Or 'error' if preferred for aborted state
+            } else {
+                 onStop(fullResponse, 'content');
+            }
+
+        } catch (error: any) {
+            if (error.name === 'AbortError') {
+                onChunk("Stream aborted by user.", 'info');
+                onStop(fullResponse, 'content'); // Or 'error'
+            } else {
+                console.error("LLM/Agent streaming error:", error);
+                const errorMessage = error.message || "Unknown error during LLM/Agent operation.";
+                onChunk(errorMessage, 'error');
+                onStop(fullResponse + "\nError: " + errorMessage, 'error');
+            }
+        } finally {
+            activeController = null; // Clear controller when done
+        }
+    };
+
+    run(); // Execute the async function
+
+    return () => { // Stop function
+        if (activeController) {
+            activeController.abort();
+            console.log("LLM stream stop requested.");
+        }
+    };
+};
+
+export const stopLLMStream = () => {
+    if (activeController) {
+        activeController.abort();
+        console.log("LLM stream stop triggered globally.");
+    }
+};
+
+
+// Token counting (simplified, placeholder)
+export const countTokens = async (text: string): Promise<number> => {
+  // A very rough approximation. For accurate counting, specific tokenizers are needed.
+  return Math.ceil(text.length / 4);
 };
