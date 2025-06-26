@@ -7,17 +7,14 @@ import { TagPageWithCount } from '../services/tagPageService'; // Import type
 interface SidebarProps {
   notes: Note[];
   nostrProfiles: NostrProfileNote[];
-  // tags: string[]; // Replaced by tagPagesWithCounts
-  tagPagesWithCounts: TagPageWithCount[];
+  tagPagesWithCounts: TagPageWithCount[]; // Replaced by tagPagesWithCounts
   selectedNoteId: number | null;
   selectedProfileId: number | null; // To distinguish selected profile
   onSelectNote: (id: number, isProfile: boolean) => void; // Modified to indicate if it's a profile
   onCreateNewNote: () => void;
   onCreateNewProfile?: () => void; // Optional: if adding profiles directly from sidebar
-  // onSelectTag: (tag: string) => void; // Replaced by onSelectTagPageId
-  onSelectTagPageId: (tagPageId: number | null) => void;
-  // selectedTag: string | null; // Replaced by selectedTagPageId
-  selectedTagPageId: number | null;
+  onSelectTagPageId: (tagPageId: number | null) => void; // Replaced by onSelectTagPageId
+  selectedTagPageId: number | null; // Replaced by selectedTagPageId
   onShowSettings: () => void;
   onShowDirectMessages?: () => void; // Added for DM navigation
   onSearchChange: (term: string) => void;
@@ -28,16 +25,13 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({
   notes,
   nostrProfiles,
-  // tags, // Replaced
   tagPagesWithCounts,
   selectedNoteId,
   selectedProfileId,
   onSelectNote,
   onCreateNewNote,
   onCreateNewProfile,
-  // onSelectTag, // Replaced
   onSelectTagPageId,
-  // selectedTag, // Replaced
   selectedTagPageId,
   onShowSettings,
   onShowDirectMessages, // Destructure new prop

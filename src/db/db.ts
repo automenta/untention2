@@ -4,13 +4,9 @@ export interface Note {
   id?: number;
   title: string;
   content: string;
-  tags: string[]; // Store tags as an array of strings
+  tagPageIds?: number[]; // Array of TagPage IDs
   createdAt: Date;
   updatedAt: Date;
-  // For full-text search, Dexie typically indexes all string properties.
-  // We can also use multiEntry indexes for tags if needed for specific queries.
-  // Old field: tags: string[];
-  tagPageIds?: number[]; // Array of TagPage IDs
 }
 
 export interface TagPage {
@@ -120,40 +116,16 @@ export class NotentionDexie extends Dexie {
           const tagPageIds: number[] = [];
           for (const tagName of note.tags) {
             if (typeof tagName === 'string' && tagName.trim() !== '') {
-              const canonicalName = tagName.trim().toLowerCase(); // Use lowercase for lookup/uniqueness
-              let tagPage = await tx.table('tagPages').where('name').equalsIgnoreCase(canonicalName).first();
-              if (!tagPage) {
-                // Store the first encountered casing for display, but uniqueness is via canonicalName (or &name index which is case sensitive by default)
-                // To enforce true case-insensitivity at DB level for 'name', it's tricky with Dexie's &name.
-                // Here, we use canonicalName for lookup. If &name is case sensitive, "Tag" and "tag" could both be added.
-                // To ensure "Tag" and "tag" map to the SAME TagPage, we must ensure 'name' in tagPages is stored canonically (e.g. lowercase)
-                // OR handle this logic strictly in getTagPageByName ensuring it always checks/creates based on lowercase.
-                // Let's assume tagPages.name will store the name as first encountered, and rely on service layer for canonical checks,
-                // OR, better, store 'name' in a canonical form (e.g. lowercase) in TagPage schema directly for &name index.
-                // For this migration, we'll try to add the tag with its original casing if not found by case-insensitive search.
-                // If the &name index is case-sensitive, this could lead to "tag" and "Tag" if both were present.
-                // A safer approach for the DB index: store TagPage.name as lowercase.
-                // For now, let's try adding and if it fails due to unique constraint (if we made name lowercase in schema), it's fine.
-                // Let's refine: store name in TagPage as given (first-encountered casing), ensure lookup is canonical.
-                // The '&name' index in Dexie is case-SENSITIVE for uniqueness.
-                // So, we must store a canonical name if we want "tag" and "Tag" to be the same.
-                // Option: Add a 'canonicalName' field to TagPage for index, or ensure 'name' itself is canonical.
-                // Let's simplify: the first version of a tag (e.g. "Work") sets the canonical name.
-                // Subsequent "work" or "WORK" will map to "Work".
-
-                let existingTagPage = await tx.table('tagPages').where('name').equalsIgnoreCase(tagName.trim()).first();
-                if (!existingTagPage) {
-                    const newTagPageId = await tx.table('tagPages').add({
-                        name: tagName.trim(), // Store the first-encountered casing
-                        createdAt: new Date(),
-                        updatedAt: new Date()
-                    });
-                    tagPageIds.push(newTagPageId as number);
-                } else {
-                    tagPageIds.push(existingTagPage.id);
-                }
+              let existingTagPage = await tx.table('tagPages').where('name').equalsIgnoreCase(tagName.trim()).first();
+              if (!existingTagPage) {
+                  const newTagPageId = await tx.table('tagPages').add({
+                      name: tagName.trim(), // Store the first-encountered casing
+                      createdAt: new Date(),
+                      updatedAt: new Date()
+                  });
+                  tagPageIds.push(newTagPageId as number);
               } else {
-                tagPageIds.push(tagPage.id);
+                  tagPageIds.push(existingTagPage.id);
               }
             }
           }

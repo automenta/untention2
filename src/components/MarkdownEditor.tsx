@@ -4,6 +4,8 @@ import 'easymde/dist/easymde.min.css'; // Correct CSS import
 import './MarkdownEditor.css';
 import { Note, NostrProfileNote } from '../db/db';
 import { TrashIcon, ShareIcon as ShareOutlineIcon, CheckIcon } from '@heroicons/react/24/outline';
+import * as tagPageService from '../services/tagPageService'; // Import tagPageService
+import * as nostrProfileService from '../services/nostrProfileService'; // Import nostrProfileService for NOSTR_PROFILE_TAG_NAME
 
 interface MarkdownEditorProps {
   note: Note | NostrProfileNote | null;
@@ -24,12 +26,17 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
 }) => {
   const [title, setTitle] = useState('');
   const [currentContent, setCurrentContent] = useState(''); // Content for SimpleMDE
-  const [tags, setTags] = useState<string[]>([]);
+  const [tags, setTags] = useState<string[]>([]); // This state holds string names for the input field
   const [isAutoSaved, setIsAutoSaved] = useState(false);
+
+  // State to track the last saved values for comparison
+  const lastSavedTitle = useRef('');
+  const lastSavedContent = useRef('');
+  const lastSavedTags = useRef<string[]>([]); // Stores string names
 
   const simpleMdeInstance = useRef<SimpleMDE | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
-  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const titleInputRef = useRef<HTMLInputElement | null>(0);
 
   const initializeEditor = useCallback((initialContentValue: string) => {
     if (simpleMdeInstance.current) {
@@ -60,23 +67,44 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   }, [isProfileEditing]); // Add isProfileEditing dependency
 
   useEffect(() => {
-    const noteTitle = note?.title || (isProfileEditing ? 'Edit Profile Notes' : '');
-    const noteContent = note?.content || '';
-    const noteTags = note?.tags || (isProfileEditing ? (note && 'npub' in note ? (note.tags.includes('nostrProfile') ? note.tags : [...note.tags, 'nostrProfile']) : ['nostrProfile']) : []);
+    const loadNoteData = async () => {
+      const noteTitle = note?.title || (isProfileEditing ? 'Edit Profile Notes' : '');
+      const noteContent = note?.content || '';
+      let noteTags: string[] = [];
 
-    setTitle(noteTitle);
-    setCurrentContent(noteContent); // Update state for MDE
-    setTags(noteTags);
+      if (note?.tagPageIds && note.tagPageIds.length > 0) {
+        const tagPages = await tagPageService.getTagPagesByIds(note.tagPageIds);
+        noteTags = tagPages.map(tp => tp.name);
+      }
 
-    initializeEditor(noteContent);
+      // For new profiles or profiles without 'nostrProfile' tag, ensure it's added for display
+      // This ensures 'nostrProfile' is always a default tag for profile notes
+      if (isProfileEditing && !noteTags.includes(nostrProfileService.NOSTR_PROFILE_TAG_NAME)) {
+          noteTags.push(nostrProfileService.NOSTR_PROFILE_TAG_NAME);
+      }
 
-    if (isProfileEditing && titleInputRef.current) {
-        titleInputRef.current.focus(); // Focus title for profile editing
-    } else if (!isProfileEditing && !note?.id && titleInputRef.current) {
-        titleInputRef.current.focus(); // Focus title for new notes
-    } else if (!isProfileEditing && simpleMdeInstance.current) {
-        simpleMdeInstance.current.codemirror.focus(); // Focus content for existing notes
-    }
+
+      setTitle(noteTitle);
+      setCurrentContent(noteContent); // Update state for MDE
+      setTags(noteTags);
+
+      // Update last saved refs to reflect the loaded note's state
+      lastSavedTitle.current = noteTitle;
+      lastSavedContent.current = noteContent;
+      lastSavedTags.current = noteTags;
+
+      initializeEditor(noteContent);
+
+      if (isProfileEditing && titleInputRef.current) {
+          titleInputRef.current.focus(); // Focus title for profile editing
+      } else if (!isProfileEditing && !note?.id && titleInputRef.current) {
+          titleInputRef.current.focus(); // Focus title for new notes
+      } else if (!isProfileEditing && simpleMdeInstance.current) {
+          simpleMdeInstance.current.codemirror.focus(); // Focus content for existing notes
+      }
+    };
+
+    loadNoteData();
 
     return () => {
       if (simpleMdeInstance.current) {
@@ -89,14 +117,21 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   // Debounced auto-save for content changes
   useEffect(() => {
     const handler = setTimeout(() => {
-      if (currentContent !== (note?.content || '') || title !== (note?.title || '') || JSON.stringify(tags) !== JSON.stringify(note?.tags || [])) {
-         // Only save if there's an actual change from the initial prop values or if it's a new item without an ID yet.
-         // For new items (note?.id is undefined), this auto-save will effectively create it if user types something.
-         // Or, we can rely on explicit save for new items. Let's prefer explicit save for new items.
-        if (note?.id || (isProfileEditing && note?.id)) { // Auto-save existing items or profile's local notes
-            onSave(note?.id, title, currentContent, tags);
+      // Compare current state with last saved state
+      const tagsChanged = JSON.stringify([...tags].sort()) !== JSON.stringify([...lastSavedTags.current].sort());
+
+      if (currentContent !== lastSavedContent.current ||
+          title !== lastSavedTitle.current ||
+          tagsChanged) {
+         // Only auto-save if it's an existing item (has an ID)
+        if (note?.id) {
+            onSave(note.id, title, currentContent, tags);
             setIsAutoSaved(true);
             setTimeout(() => setIsAutoSaved(false), 2000);
+            // Update last saved refs after successful auto-save
+            lastSavedTitle.current = title;
+            lastSavedContent.current = currentContent;
+            lastSavedTags.current = tags;
         }
       }
     }, 1500);
@@ -108,6 +143,10 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     onSave(note?.id, title, currentContent, tags);
     setIsAutoSaved(true);
     setTimeout(() => setIsAutoSaved(false), 2000);
+    // Update last saved refs after manual save
+    lastSavedTitle.current = title;
+    lastSavedContent.current = currentContent;
+    lastSavedTags.current = tags;
   };
 
   const handleDeleteClick = () => {

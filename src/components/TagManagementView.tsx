@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import * as noteService from '../services/noteService';
-import { TagWithCount } from '../services/noteService';
+import * as tagPageService from '../services/tagPageService'; // Use tagPageService
+import { TagPageWithCount } from '../services/tagPageService'; // Correct import for TagPageWithCount
 import { XMarkIcon, PencilIcon, TrashIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 
 interface TagManagementViewProps {
@@ -11,28 +11,24 @@ interface TagManagementViewProps {
 type SortKey = 'name_asc' | 'name_desc' | 'count_asc' | 'count_desc';
 
 const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }) => {
-  const [allTags, setAllTags] = useState<TagWithCount[]>([]);
+  const [allTags, setAllTags] = useState<TagPageWithCount[]>([]); // Use TagPageWithCount
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name_asc');
 
   // States for modals
-  const [tagToRename, setTagToRename] = useState<TagWithCount | null>(null);
+  const [tagToRename, setTagToRename] = useState<TagPageWithCount | null>(null); // Use TagPageWithCount
   const [newTagName, setNewTagName] = useState('');
   const [renameWarning, setRenameWarning] = useState('');
 
-  const [tagToDelete, setTagToDelete] = useState<TagWithCount | null>(null);
+  const [tagToDelete, setTagToDelete] = useState<TagPageWithCount | null>(null); // Use TagPageWithCount
 
   // Fetch tags when component mounts or isOpen changes to true
   useEffect(() => {
     if (isOpen) {
       setIsLoading(true);
-      // noteService.getUniqueTagsWithCounts() returns a liveQuery
-      // We need to subscribe to it or fetch its current value.
-      // For a modal, fetching current value once might be okay,
-      // or subscribe and unsubscribe. Let's fetch once for now.
-      const liveQueryInstance = noteService.getUniqueTagsWithCounts();
-      const subscription = liveQueryInstance.subscribe({
+      // Use tagPageService.getAllTagPagesWithItemCounts() which returns a liveQuery
+      const subscription = tagPageService.getAllTagPagesWithItemCounts().subscribe({
         next: (value) => {
           setAllTags(value);
           setIsLoading(false);
@@ -73,34 +69,39 @@ const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }
   }, [allTags, searchTerm, sortKey]);
 
   const handleRename = async () => {
-    if (!tagToRename || !newTagName.trim() || tagToRename.name === newTagName.trim()) {
-      setRenameWarning("New tag name cannot be empty or same as old name.");
+    if (!tagToRename || !newTagName.trim()) {
+      setRenameWarning("New tag name cannot be empty.");
       return;
     }
-    // Check for merge conflicts / warnings
-    if (allTags.some(t => t.name === newTagName.trim() && t.name !== tagToRename.name)) {
-        // Could show a more specific warning here or handle in UI
+    // Check if the new name is the same as the old name (case-insensitive)
+    if (tagToRename.name.toLowerCase() === newTagName.trim().toLowerCase()) {
+        setRenameWarning("New tag name is the same as the old name (case-insensitive). No change needed.");
+        return;
     }
+
     try {
-      await noteService.renameTag(tagToRename.name, newTagName.trim());
+      await tagPageService.renameTagPage(tagToRename.id!, newTagName.trim()); // Use tagPageService
       setTagToRename(null);
       setNewTagName('');
       setRenameWarning('');
-      // Tags will refresh via live query effect if still open, or on next open
-    } catch (error) {
+      // Tags will refresh via live query effect
+    } catch (error: any) { // Catch error to display specific messages
       console.error("Error renaming tag:", error);
-      setRenameWarning("Failed to rename tag.");
+      // The renameTagPage service now handles the merge, so this specific error might not be thrown for conflicts
+      // but rather for truly invalid operations.
+      setRenameWarning("Failed to rename tag. Please try again.");
     }
   };
 
   const handleDelete = async () => {
     if (!tagToDelete) return;
     try {
-      await noteService.deleteTagFromNotes(tagToDelete.name);
+      await tagPageService.deleteTagPageAndUnlink(tagToDelete.id!); // Use tagPageService
       setTagToDelete(null);
       // Tags will refresh
     } catch (error) {
       console.error("Error deleting tag:", error);
+      // Optionally set an error message here
     }
   };
 
@@ -156,8 +157,8 @@ const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }
             >
               <option value="name_asc">Sort by Name (A-Z)</option>
               <option value="name_desc">Sort by Name (Z-A)</option>
-              <option value="count_desc">Sort by Notes (Most)</option>
-              <option value="count_asc">Sort by Notes (Least)</option>
+              <option value="count_desc">Sort by Items (Most)</option>
+              <option value="count_asc">Sort by Items (Least)</option>
             </select>
           </div>
         </div>
@@ -173,10 +174,10 @@ const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }
           {!isLoading && filteredAndSortedTags.length > 0 && (
             <ul className="space-y-2">
               {filteredAndSortedTags.map(tag => (
-                <li key={tag.name} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-md hover:bg-gray-100 dark:hover:bg-gray-600">
+                <li key={tag.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-md hover:bg-gray-100 dark:hover:bg-gray-600">
                   <div>
                     <span className="font-medium text-gray-800 dark:text-gray-100">{tag.name}</span>
-                    <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">({tag.count} note{tag.count === 1 ? '' : 's'})</span>
+                    <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">({tag.count} item{tag.count === 1 ? '' : 's'})</span>
                   </div>
                   <div className="space-x-2">
                     <button
@@ -200,32 +201,25 @@ const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }
           )}
         </div>
 
-        {/* Footer (optional, could have a close button here too) */}
-        {/* <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 dark:text-gray-200 dark:bg-gray-600 dark:hover:bg-gray-500 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            Close
-          </button>
-        </div> */}
-      </div>
-
-      {/* Rename Modal */}
+        {/* Rename Modal */}
       {tagToRename && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-500 bg-opacity-75 dark:bg-gray-900 dark:bg-opacity-75 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Rename Tag</h3>
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              Renaming tag: <span className="font-medium">{tagToRename.name}</span>
+              Renaming tag: <span className="font-medium">"{tagToRename.name}"</span>
             </p>
             <input
               type="text"
               value={newTagName}
               onChange={(e) => {
                 setNewTagName(e.target.value);
-                if (allTags.some(t => t.name === e.target.value.trim() && t.name !== tagToRename.name)) {
-                  setRenameWarning(`Warning: Tag '${e.target.value.trim()}' already exists. This will merge notes under the existing tag.`);
+                const trimmedNewName = e.target.value.trim();
+                const existingTag = allTags.find(t => t.name.toLowerCase() === trimmedNewName.toLowerCase() && t.id !== tagToRename.id);
+                if (existingTag) {
+                  setRenameWarning(`Warning: Tag "${existingTag.name}" already exists. Renaming "${tagToRename.name}" to "${trimmedNewName}" will merge all associated items under "${existingTag.name}".`);
+                } else if (trimmedNewName.toLowerCase() === tagToRename.name.toLowerCase()) {
+                  setRenameWarning("New tag name is the same as the old name (case-insensitive). No change needed.");
                 } else {
                   setRenameWarning('');
                 }
@@ -243,10 +237,10 @@ const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }
               </button>
               <button
                 onClick={handleRename}
-                disabled={!newTagName.trim() || newTagName.trim() === tagToRename.name && !allTags.some(t => t.name === newTagName.trim() && t.name !== tagToRename.name) } // Disable if same or empty, unless it's a merge case for case change
+                disabled={!newTagName.trim() || newTagName.trim().toLowerCase() === tagToRename.name.toLowerCase()}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               >
-                Rename
+                {allTags.some(t => t.name.toLowerCase() === newTagName.trim().toLowerCase() && t.id !== tagToRename.id) ? "Merge & Rename" : "Rename"}
               </button>
             </div>
           </div>
@@ -260,7 +254,7 @@ const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Delete Tag</h3>
             <p className="text-sm text-gray-600 dark:text-gray-300">
               Are you sure you want to delete the tag <span className="font-medium">"{tagToDelete.name}"</span>?
-              This will remove the tag from all {tagToDelete.count} associated note(s). This action cannot be undone.
+              This will remove the tag from all {tagToDelete.count} associated item(s). This action cannot be undone.
             </p>
             <div className="flex justify-end space-x-3">
               <button

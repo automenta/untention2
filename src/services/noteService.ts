@@ -1,6 +1,7 @@
 import { db, Note } from '../db/db';
 import { liveQuery, Observable } from 'dexie';
 import * as tagPageService from './tagPageService'; // Import the new service
+import { firstValueFrom } from 'rxjs'; // Import firstValueFrom for converting Observable to Promise
 
 export const createNote = async (title: string, content: string, tagInput: string[] = []): Promise<number> => {
   const tagPageIds: number[] = [];
@@ -103,30 +104,10 @@ export const getNotesByTagPageId = (tagPageId: number) => {
 
 // getAllTags now sources its names from tagPageService
 export const getAllTags = (): Observable<string[]> => {
-  // This function is intended to be used with useLiveQuery in React components.
-  // It subscribes to the live query from tagPageService and maps the results.
   return liveQuery(async () => {
-    const tagPagesWithCounts = await new Promise<tagPageService.TagPageWithCount[]>((resolve, reject) => {
-      const subscription = tagPageService.getAllTagPagesWithItemCounts().subscribe({
-        next: (value) => resolve(value),
-        error: (err) => reject(err),
-      });
-      // This is a common pattern to bridge a live query to a one-time async value if needed,
-      // but since getAllTagPagesWithItemCounts is already a live query,
-      // we just need to ensure its result is correctly processed.
-      // The subscription here will be managed by the outer liveQuery.
-      // However, it's better to directly use the observable nature of Dexie's liveQuery.
-      // The `await` keyword on a liveQuery observable directly gives its current value within another liveQuery block.
-    });
-
-    // Re-evaluating the direct use of liveQuery instance from another service:
-    // The simplest way for `getAllTags` to remain a live query source of string names
-    // is to depend on `tagPageService.getAllTagPagesWithItemCounts` correctly.
-    const tagsWithCountsObservable = tagPageService.getAllTagPagesWithItemCounts();
-
-    // This is a pattern to transform results from one live observable within another.
-    // We need to await the current value of the observable.
-    const currentTagPagesWithCounts = await tagsWithCountsObservable;
+    // Use firstValueFrom to convert the Observable from tagPageService into a Promise
+    // that can be awaited within this async liveQuery function.
+    const currentTagPagesWithCounts = await firstValueFrom(tagPageService.getAllTagPagesWithItemCounts());
 
     return currentTagPagesWithCounts.map(tp => tp.name).sort((a,b) => a.localeCompare(b));
   });

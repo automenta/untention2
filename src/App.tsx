@@ -35,7 +35,6 @@ function App() {
   const [currentNote, setCurrentNote] = useState<Note | NostrProfileNote | null>(null);
   const [isEditing, setIsEditing] = useState(false); // For note/profile editor
   const [searchTerm, setSearchTerm] = useState('');
-  // const [selectedTag, setSelectedTag] = useState<string | null>(null); // Replaced by selectedTagPageId
   const [selectedTagPageId, setSelectedTagPageId] = useState<number | null>(null);
 
   const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
@@ -56,19 +55,29 @@ function App() {
   const notes = useLiveQuery(
     () => selectedTagPageId !== null
       ? noteService.getNotesByTagPageId(selectedTagPageId)
-      : noteService.searchNotes(searchTerm), // searchNotes should ideally also be aware of tagPageId if combined search is needed
+      : noteService.searchNotes(searchTerm),
     [searchTerm, selectedTagPageId], []
   ) || [];
 
-  const nostrProfiles = useLiveQuery( // Assuming nostrProfiles might also be taggable in the future or share search logic
-    () => searchTerm // This part needs review if nostrProfiles are also filtered by selectedTagPageId
-      ? nostrProfileService.searchProfiles(searchTerm) // Assuming a searchProfiles function exists or is similar to noteService.searchNotes
-      // If nostrProfiles should also filter by selectedTagPageId, this query needs to be more complex:
-      // Example: selectedTagPageId !== null ? nostrProfileService.getProfilesByTagPageId(selectedTagPageId) : nostrProfileService.searchProfiles(searchTerm)
+  // Fetch all Nostr profiles. Client-side filter will be applied below if a tag is selected.
+  const allNostrProfiles = useLiveQuery(
+    () => searchTerm
+      ? nostrProfileService.searchProfiles(searchTerm) // Assuming searchProfiles exists
       : nostrProfileService.getAllProfileNotes(),
-    [searchTerm /*, selectedTagPageId */], // Add selectedTagPageId if it filters profiles
+    [searchTerm], // selectedTagPageId is not a direct dependency for the DB query here
     []
   ) || [];
+
+  // Apply client-side filtering for Nostr profiles based on selectedTagPageId
+  const nostrProfiles = React.useMemo(() => {
+    if (selectedTagPageId === null) {
+      return allNostrProfiles;
+    }
+    return allNostrProfiles.filter(profile =>
+      profile.tagPageIds && profile.tagPageIds.includes(selectedTagPageId)
+    );
+  }, [allNostrProfiles, selectedTagPageId]);
+
 
   // Fetch all TagPages with their item counts for the sidebar
   const allTagPagesWithCounts = useLiveQuery(
@@ -367,15 +376,23 @@ function App() {
     if (activeView.type === 'profile' && id) {
       const existingProfile = await nostrProfileService.getProfileNoteById(id);
       if (existingProfile) {
-        await nostrProfileService.createOrUpdateProfileNote({ ...existingProfile, title, content, tags });
+        // Convert tags (string names) to tagPageIds for saving
+        const tagPageIds: number[] = [];
+        for (const tagName of tags) {
+          const tagPage = await tagPageService.getTagPageByName(tagName, true);
+          if (tagPage && tagPage.id) {
+            tagPageIds.push(tagPage.id);
+          }
+        }
+        await nostrProfileService.createOrUpdateProfileNote({ ...existingProfile, title, content, tagPageIds: [...new Set(tagPageIds)] });
         itemToSelectAfterSave = await nostrProfileService.getProfileNoteById(id);
       }
     } else if (activeView.type === 'note' || activeView.type === 'new_note_editor') {
       if (id) {
-        await noteService.updateNote(id, { title, content, tags });
+        await noteService.updateNote(id, { title, content, tagInput: tags }); // noteService handles tagInput to tagPageIds conversion
         itemToSelectAfterSave = await noteService.getNoteById(id);
       } else {
-        const newNoteId = await noteService.createNote(title, content, tags);
+        const newNoteId = await noteService.createNote(title, content, tags); // noteService handles tagInput to tagPageIds conversion
         itemToSelectAfterSave = await noteService.getNoteById(newNoteId);
         if (itemToSelectAfterSave) setActiveView({ type: 'note', id: newNoteId });
       }
@@ -443,18 +460,15 @@ function App() {
     <>
       <AppLayout
         sidebar={{
-          notes: notes.filter(n => !n.tagPageIds?.includes(nostrProfileService.NOSTR_PROFILE_TAG_PAGE_ID_PLACEHOLDER)), // Placeholder for actual ID
+          notes: notes,
           nostrProfiles: nostrProfiles,
-          // tags: allTags, // Replaced by allTagPagesWithCounts
           tagPagesWithCounts: allTagPagesWithCounts,
           selectedNoteId: activeView.type === 'note' ? activeView.id : null,
           selectedProfileId: activeView.type === 'profile' ? activeView.id : null,
           onSelectNote: handleSelectNote,
           onCreateNewNote: handleCreateNewNote,
           onCreateNewProfile: handleCreateNewProfile,
-          // onSelectTag: setSelectedTag, // Replaced by onSelectTagPageId
           onSelectTagPageId: setSelectedTagPageId,
-          // selectedTag: selectedTag, // Replaced by selectedTagPageId
           selectedTagPageId: selectedTagPageId,
           onShowSettings: handleShowSettings,
           onShowDirectMessages: handleShowDirectMessages, // Pass handler for DMs

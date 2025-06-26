@@ -2,8 +2,28 @@ import { db, NostrProfileNote } from '../db/db';
 import { Event, nip19, Filter } from 'nostr-tools/pure';
 import * as nostrService from './nostrService'; // For relay connection using SimplePool
 import { queryProfile as nip05QueryProfile } from 'nostr-tools/nip05'; // NIP-05 utility
+import * as tagPageService from './tagPageService'; // Import tagPageService
 
-// const PROFILE_FETCH_TIMEOUT_MS = 5000; // Timeout is now handled by SimplePool's list/get methods' default behavior or can be configured if needed.
+// Define a placeholder ID for the 'nostrProfile' tag.
+// This is a convention to ensure a consistent tag for all Nostr profiles.
+// In a real app, you might want to ensure this tag is created on first run.
+export const NOSTR_PROFILE_TAG_NAME = 'nostrProfile';
+let nostrProfileTagPageId: number | null = null;
+
+// Function to get or create the 'nostrProfile' tag page ID
+async function getOrCreateNostrProfileTagPageId(): Promise<number> {
+  if (nostrProfileTagPageId !== null) {
+    return nostrProfileTagPageId;
+  }
+  const tagPage = await tagPageService.getTagPageByName(NOSTR_PROFILE_TAG_NAME, true);
+  if (tagPage && tagPage.id) {
+    nostrProfileTagPageId = tagPage.id;
+    return tagPage.id;
+  }
+  // This should ideally not happen if createIfNotExist is true and DB is writable
+  throw new Error(`Failed to get or create tag page for '${NOSTR_PROFILE_TAG_NAME}'`);
+}
+
 
 export const createOrUpdateProfileNote = async (
   profileData: Partial<NostrProfileNote>,
@@ -68,7 +88,6 @@ export const createOrUpdateProfileNote = async (
   if (!existingProfile) {
     finalProfileData.title = profileData.title || fetchedProfileData.name || targetNpub.substring(0, 10);
     finalProfileData.content = profileData.content || fetchedProfileData.about || ''; // Local notes content
-    finalProfileData.tags = profileData.tags || ['nostrProfile']; // Default tag
     finalProfileData.createdAt = new Date();
   } else {
     // If we fetched new data and the user didn't provide a specific title/content, update them from profile
@@ -81,6 +100,12 @@ export const createOrUpdateProfileNote = async (
         finalProfileData.content = fetchedProfileData.about; // Local notes content can mirror 'about' if not set
     }
   }
+
+  // Ensure 'nostrProfile' tag is always present for NostrProfileNotes
+  const nostrProfileTagId = await getOrCreateNostrProfileTagPageId();
+  const currentTagPageIds = new Set(finalProfileData.tagPageIds || []);
+  currentTagPageIds.add(nostrProfileTagId);
+  finalProfileData.tagPageIds = Array.from(currentTagPageIds);
 
 
   if (existingProfile?.id) {
