@@ -28,21 +28,22 @@ const pwaOptions: Partial<VitePWAOptions> = {
         src: 'icons/icon-512x512.png',
         sizes: '512x512',
         type: 'image/png',
-        purpose: 'any maskable',
+        purpose: 'any maskable', // 'any maskable' is more common than 'any maskable purpose'
       },
     ],
   },
   workbox: {
     globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'], // Cache these file types
+    navigateFallback: 'index.html', // For SPA routing offline
     runtimeCaching: [
-      { // Example: Cache Google Fonts (if used)
+      {
         urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
         handler: 'CacheFirst',
         options: {
-          cacheName: 'google-fonts-cache',
+          cacheName: 'google-fonts-googleapis', // Specific cache name
           expiration: {
             maxEntries: 10,
-            maxAgeSeconds: 60 * 60 * 24 * 365, // <== 365 days
+            maxAgeSeconds: 60 * 60 * 24 * 365, // 365 days
           },
           cacheableResponse: {
             statuses: [0, 200],
@@ -53,18 +54,30 @@ const pwaOptions: Partial<VitePWAOptions> = {
         urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
         handler: 'CacheFirst',
         options: {
-          cacheName: 'gstatic-fonts-cache',
+          cacheName: 'google-fonts-gstatic', // Specific cache name
           expiration: {
             maxEntries: 10,
-            maxAgeSeconds: 60 * 60 * 24 * 365, // <== 365 days
+            maxAgeSeconds: 60 * 60 * 24 * 365, // 365 days
           },
           cacheableResponse: {
             statuses: [0, 200],
           },
         },
-      }
-      // Add other runtime caching strategies if needed, e.g., for API calls that can be cached.
-      // However, Dexie handles data caching, so this is mainly for external assets.
+      },
+      {
+        urlPattern: /^https:\/\/.*\.(?:png|jpg|jpeg|svg|gif|webp)$/i, // General pattern for image URLs
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'nostr-profile-images',
+          expiration: {
+            maxEntries: 60, // Cache up to 60 images
+            maxAgeSeconds: 60 * 60 * 24 * 30, // Cache for 30 days
+          },
+          cacheableResponse: {
+            statuses: [0, 200], // 0 for opaque responses (CORS)
+          },
+        },
+      },
     ],
   }
 }
@@ -72,6 +85,7 @@ const pwaOptions: Partial<VitePWAOptions> = {
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  base: '/untention2/', // Set the base path for GitHub Pages deployment
   plugins: [
     react(),
     VitePWA(pwaOptions)

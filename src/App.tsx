@@ -288,8 +288,32 @@ function App() {
         setCurrentNote(note || null);
         if (note) setIsEditing(true);
       } else if (activeView.type === 'profile' && activeView.id !== null) {
-        const profile = await nostrProfileService.getProfileNoteById(activeView.id);
-        setCurrentNote(profile || null);
+        let profile = await nostrProfileService.getProfileNoteById(activeView.id);
+        setCurrentNote(profile || null); // Display from DB first
+
+        if (profile && navigator.onLine) { // If profile exists and online
+          // Stale if not checked in the last 15 minutes, or if nostrProfileService itself would refetch (e.g. > 24h)
+          const isStaleByTime = !profile.lastChecked || (Date.now() - new Date(profile.lastChecked).getTime() > 15 * 60 * 1000); // 15 minutes
+
+          // The createOrUpdateProfileNote has its own internal 24h check for fetching.
+          // We trigger an attempt if our shorter 15min window is met,
+          // or rely on its internal logic if it's just to update lastChecked.
+          if (isStaleByTime) {
+            try {
+              // Attempt to refresh. The 'true' flag suggests a fetch should be attempted.
+              // The service method itself will decide based on its own more comprehensive staleness rules (e.g. 24h for kind0).
+              // This call will update the DB.
+              await nostrProfileService.createOrUpdateProfileNote({ npub: profile.npub }, profile.npub, true);
+
+              // Re-fetch from DB to get the potentially updated profile
+              const refreshedProfile = await nostrProfileService.getProfileNoteById(activeView.id);
+              setCurrentNote(refreshedProfile || null);
+            } catch (error) {
+              console.warn("Failed to automatically refresh profile in App.tsx:", error);
+              // Profile from DB (before refresh attempt) is already set, so UI is consistent
+            }
+          }
+        }
       } else if (activeView.type === 'new_note_editor') {
         setCurrentNote(null);
         setIsEditing(true);
