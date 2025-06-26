@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { PaperAirplaneIcon, StopCircleIcon, SparklesIcon, ExclamationTriangleIcon, InformationCircleIcon, InboxArrowDownIcon } from '@heroicons/react/24/solid'; // Using solid for main action buttons
+import { PaperAirplaneIcon, StopCircleIcon, SparklesIcon, ExclamationTriangleIcon, InformationCircleIcon, InboxArrowDownIcon, TrashIcon } from '@heroicons/react/24/solid'; // Using solid for main action buttons
 import * as lmService from '../services/lmService';
 import * as lmCacheService from '../services/lmCacheService';
 import { db } from '../db/db';
@@ -137,6 +137,19 @@ const LMInteractionArea: React.FC<LMInteractionAreaProps> = ({ currentNoteConten
     // isLoading state will be managed by onStop/onError callbacks from streamLLMResponse
   };
 
+  const handleClearChat = () => {
+    if (window.confirm("Are you sure you want to clear the entire chat history?")) {
+      setChatHistory([]);
+      setPrompt('');
+      setInputTokens(0);
+      setOutputTokens(0);
+      setIsCachedResponse(false);
+      if (stopStreamingFunc.current) {
+        stopStreamingFunc.current(); // Stop any ongoing generation
+      }
+    }
+  };
+
   useHotkeys('ctrl+enter, meta+enter', handleSubmitPrompt, { enableOnFormTags: ['textarea'] }, [handleSubmitPrompt]);
 
   const getMessageStyle = (type: ChatMessage['type']) => {
@@ -220,6 +233,14 @@ const LMInteractionArea: React.FC<LMInteractionAreaProps> = ({ currentNoteConten
             <PaperAirplaneIcon className="h-5 w-5" />
           </button>
         )}
+        <button
+          onClick={handleClearChat}
+          className="p-2.5 text-gray-600 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-400"
+          title="Clear Chat History"
+          disabled={isLoading}
+        >
+          <TrashIcon className="h-5 w-5" />
+        </button>
       </div>
     </div>
   );

@@ -82,12 +82,10 @@ class CodeExplainerTool extends Tool {
 }
 
 
-// TODO: Add more tools as needed, e.g., CodeGeneratorTool, WebSearchTool (if internet access is feasible and desired)
-
 // New WebSearchTool
 class WebSearchTool extends Tool {
   name = "web_search";
-  description = "Searches the web for the provided query. Input should be the search query.";
+  description = "Searches the web for the provided query. Input should be the search query. NOTE: This is a simulated tool for demonstration purposes and does not perform actual live web searches.";
 
   constructor() {
     super();
@@ -99,23 +97,23 @@ class WebSearchTool extends Tool {
       // Using JSONPlaceholder as a stand-in.
       const response = await fetch(`https://jsonplaceholder.typicode.com/posts?q=${encodeURIComponent(input)}`);
       if (!response.ok) {
-        return `Error fetching search results: ${response.statusText}`;
+        return `Error fetching simulated search results: ${response.statusText}`;
       }
       const results = await response.json();
 
       if (!Array.isArray(results) || results.length === 0) {
-        return "No search results found.";
+        return "No simulated search results found.";
       }
 
       // Summarize the first few results
       const summary = results.slice(0, 3).map((post: any, index: number) =>
-        `Result ${index + 1}: ${post.title}\n${post.body.substring(0, 100)}...`
+        `Simulated Result ${index + 1}: ${post.title}\n${post.body.substring(0, 100)}...`
       ).join('\n\n');
 
-      return `Search results for "${input}":\n\n${summary}`;
+      return `Simulated search results for "${input}":\n\n${summary}`;
     } catch (error: any) {
-      console.error("Error in WebSearchTool:", error);
-      return `Error performing web search: ${error.message}`;
+      console.error("Error in WebSearchTool (simulated):", error);
+      return `Error performing simulated web search: ${error.message}`;
     }
   }
 }

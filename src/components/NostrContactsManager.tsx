@@ -53,7 +53,6 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
               {
                 npub: contactNpub,
                 title: petname || contactNpub.substring(0,10), // Use petname as title if available
-                isContact: true,
                 // We could store relayUrl from kind3 if desired, e.g. in a custom field or local notes.
               },
               contactNpub, // npubToFetch for potential kind0 lookup
@@ -167,7 +166,7 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
     } catch (error: any) {
       showMessage('error', `Failed to remove contact: ${error.message}`);
     }
-  };
+    };
 
   const handleDownloadContacts = () => {
     if (!contacts || contacts.length === 0) {

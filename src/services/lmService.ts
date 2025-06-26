@@ -217,5 +217,6 @@ export const stopLLMStream = () => {
 // Token counting (simplified, placeholder)
 export const countTokens = async (text: string): Promise<number> => {
   // A very rough approximation. For accurate counting, specific tokenizers are needed.
+  // This approximation assumes about 4 characters per token on average for English text.
   return Math.ceil(text.length / 4);
 };
