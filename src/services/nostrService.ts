@@ -7,8 +7,9 @@ import {
   SimplePool,
   Filter,
   finalizeEvent,
-} from 'nostr-tools/pure'; // Using pure for direct imports
-import { relayInit, Relay } from 'nostr-tools/relay'; // if specific relay features are needed beyond SimplePool
+  relayInit,
+  Relay
+} from 'nostr-tools';
 import * as settingsService from './settingsService';
 import { db } from '../db/db';
 

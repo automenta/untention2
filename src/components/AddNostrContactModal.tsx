@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import * as nostrProfileService from '../services/nostrProfileService';
+import { nip19 } from 'nostr-tools'; // Import nip19
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { useToastContext } from '../contexts/ToastContext'; // Import useToastContext
 
@@ -37,7 +38,7 @@ const AddNostrContactModal: React.FC<AddNostrContactModalProps> = ({ isOpen, onC
       }
     } else {
       try {
-        const decoded = nostrService.nip19.decode(identifier); // Using nostrService's re-exported nip19
+        const decoded = nip19.decode(identifier); // Use direct import
         if (decoded.type !== 'npub') {
           setValidationError('Invalid npub format. Identifier is not a recognizable npub.');
           setIsLoading(false);

@@ -4,7 +4,7 @@ import { PlusIcon, TagIcon, Cog6ToothIcon, DocumentTextIcon, UserCircleIcon, XMa
 
 import { TagPageWithCount } from '../services/tagPageService'; // Import type
 
-interface SidebarProps {
+export interface SidebarProps { // Added export
   notes: Note[];
   nostrProfiles: NostrProfileNote[];
   tagPagesWithCounts: TagPageWithCount[]; // Replaced by tagPagesWithCounts

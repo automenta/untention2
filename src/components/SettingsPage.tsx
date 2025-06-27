@@ -4,12 +4,14 @@ import * as settingsService from '../services/settingsService';
 import * as nostrProfileService from '../services/nostrProfileService';
 import * as nostrService from '../services/nostrService';
 import { Settings, NostrProfileNote } from '../db/db';
-import { getPublicKey } from 'nostr-tools/pure';
-import { nip19 } from 'nostr-tools/nip19';
-import { generateSecretKey } from 'nostr-tools/pure';
+import { getPublicKey, nip19, generateSecretKey } from 'nostr-tools';
 import { EyeIcon, EyeSlashIcon, ArrowPathIcon, UserCircleIcon, ArrowDownTrayIcon, PencilSquareIcon, UsersIcon } from '@heroicons/react/24/outline';
 import NostrContactsManager from './NostrContactsManager'; // Import the new component
 import { useToastContext } from '../contexts/ToastContext'; // Import useToastContext
+
+interface SettingsPageProps {
+  onExit: () => void; // Prop to handle exiting the settings view
+}
 
 const availableModels = {
   openai: ["gpt-4", "gpt-4-turbo-preview", "gpt-3.5-turbo"],
@@ -18,7 +20,7 @@ const availableModels = {
   gemini: ["gemini-pro"], // Placeholder, as full integration is pending
 };
 
-const SettingsPage: React.FC = () => {
+const SettingsPage: React.FC<SettingsPageProps> = ({ onExit }) => {
   const currentSettings = useLiveQuery(settingsService.getSettings(), []) as Settings | undefined;
 
   interface ValidationErrors {
@@ -361,7 +363,7 @@ const SettingsPage: React.FC = () => {
           </select>
         </div>
 
-        {selectedProvider && selectedProvider !== 'ollama' && selectedProvider !== 'gemini' && (
+        {(selectedProvider === 'openai' || selectedProvider === 'anthropic') && (
           <div className="mb-4 relative">
             <label htmlFor="lmApiKey" className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">API Key ({selectedProvider})</label>
             <input

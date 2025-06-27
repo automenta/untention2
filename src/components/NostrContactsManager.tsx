@@ -4,8 +4,7 @@ import { db, NostrProfileNote } from '../db/db';
 import * as nostrService from '../services/nostrService';
 import * as settingsService from '../services/settingsService';
 import * as nostrProfileService from '../services/nostrProfileService';
-import { nip19 } from 'nostr-tools/nip19';
-import { Event } from 'nostr-tools/pure';
+import { nip19, Event } from 'nostr-tools';
 import { ArrowDownTrayIcon, ArrowUpTrayIcon, ArrowPathIcon, UserPlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useToastContext } from '../contexts/ToastContext'; // Import useToastContext
 

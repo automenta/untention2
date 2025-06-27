@@ -1,7 +1,8 @@
 import { db, NostrProfileNote } from '../db/db';
-import { Event, nip19, Filter } from 'nostr-tools/pure';
+import { Event, nip19, Filter } from 'nostr-tools';
 import * as nostrService from './nostrService'; // For relay connection using SimplePool
 import { queryProfile as nip05QueryProfile } from 'nostr-tools/nip05'; // NIP-05 utility
+import { Observable } from 'dexie'; // Added for searchProfiles return type
 import * as tagPageService from './tagPageService'; // Import tagPageService
 
 // Define a placeholder ID for the 'nostrProfile' tag.
@@ -260,4 +261,30 @@ export const resolveNip05ToNpub = async (nip05Identifier: string): Promise<strin
     console.error(`Error resolving NIP-05 ${nip05Identifier}:`, error);
   }
   return null;
+};
+
+export const searchProfiles = (term: string): Observable<NostrProfileNote[]> => {
+  if (!term.trim()) {
+    // If the term is empty, return all profiles, consistent with how getAllProfileNotes works.
+    // Or, if getAllProfileNotes already returns an Observable, we can directly return its call.
+    // Assuming getAllProfileNotes() returns liveQuery observable.
+    return getAllProfileNotes();
+  }
+  const lowerTerm = term.toLowerCase();
+  return liveQuery(() =>
+    db.nostrProfiles
+      .filter(profile =>
+        (profile.name && profile.name.toLowerCase().includes(lowerTerm)) ||
+        (profile.title && profile.title.toLowerCase().includes(lowerTerm)) || // Search by local title/alias
+        (profile.npub && profile.npub.toLowerCase().includes(lowerTerm)) ||
+        (profile.about && profile.about.toLowerCase().includes(lowerTerm)) || // Search by about content
+        (profile.nip05 && profile.nip05.toLowerCase().includes(lowerTerm))    // Search by NIP-05
+      )
+      .toArray()
+      .then(profiles => profiles.sort((a, b) => { // Sort results
+        const nameA = a.name || a.title || a.npub;
+        const nameB = b.name || b.title || b.npub;
+        return nameA.localeCompare(nameB);
+      }))
+  );
 };

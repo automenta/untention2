@@ -141,7 +141,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
             <DirectMessagesPageComponent />
           )}
 
-          {showEditor && activeView.type !== 'direct_messages' && ( // Ensure editor doesn't show on DM page
+          {showEditor && ( // activeView.type !== 'direct_messages' is redundant due to showEditor logic
             <div className="h-full flex flex-col">
               <MarkdownEditor
                 key={editorKey}
