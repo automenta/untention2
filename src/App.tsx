@@ -103,9 +103,30 @@ function App() {
   }, [theme, currentSettings?.theme]);
 
 
-  const toggleTheme = () => {
+  function toggleTheme() {
     setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
-  };
+  }
+
+  // Define handlers used in commandActions *before* commandActions definition
+  function handleCreateNewNote() {
+    setActiveView({ type: 'new_note_editor' });
+    setCurrentNote(null);
+    setIsEditing(true);
+  }
+
+  function handleCreateNewProfile() {
+    setIsAddContactModalOpen(true);
+  }
+
+  function handleShowSettings() {
+    setActiveView({ type: 'settings' });
+  }
+
+  function handleShowDirectMessages() {
+    setActiveView({ type: 'direct_messages' });
+    setCurrentNote(null); // Clear any active note/profile when switching to DMs
+    setIsEditing(false);
+  }
 
   const commandActions: CommandAction[] = [
     {
@@ -341,21 +362,21 @@ function App() {
     if (!isProfile) setIsEditing(true); // Auto-edit notes
   };
 
-  const handleCreateNewNote = () => {
-    setActiveView({ type: 'new_note_editor' });
-    setCurrentNote(null);
-    setIsEditing(true);
-  };
+  // const handleCreateNewNote = () => { // Moved up
+  //   setActiveView({ type: 'new_note_editor' });
+  //   setCurrentNote(null);
+  //   setIsEditing(true);
+  // };
 
-  const handleCreateNewProfile = () => {
-    setIsAddContactModalOpen(true);
-  };
+  // const handleCreateNewProfile = () => { // Moved up
+  //   setIsAddContactModalOpen(true);
+  // };
 
-  const handleShowDirectMessages = () => {
-    setActiveView({ type: 'direct_messages' });
-    setCurrentNote(null); // Clear any active note/profile when switching to DMs
-    setIsEditing(false);
-  };
+  // const handleShowDirectMessages = () => { // Moved up
+  //   setActiveView({ type: 'direct_messages' });
+  //   setCurrentNote(null); // Clear any active note/profile when switching to DMs
+  //   setIsEditing(false);
+  // };
 
   const handleContactAdded = async (profileId: number) => {
     setIsAddContactModalOpen(false);
@@ -436,7 +457,7 @@ function App() {
     }
   };
 
-  const handleShowSettings = () => setActiveView({ type: 'settings' });
+  // const handleShowSettings = () => setActiveView({ type: 'settings' }); // Moved up
   const handleExitSettings = () => {
      // Default to DMs if no other view was active, or to the last note/profile
     if (currentNote && activeView.type !== 'settings') { // activeView might be 'profile' or 'note'
