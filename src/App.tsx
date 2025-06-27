@@ -9,18 +9,24 @@ import {
   SunIcon,
   MoonIcon,
   ChatBubbleLeftRightIcon,
+  TagIcon, // Added for Manage Tags
+  TrashIcon, // Added for Clear Cache
 } from '@heroicons/react/24/outline';
 import { useHotkeys } from 'react-hotkeys-hook'; // Import useHotkeys
 import AddNostrContactModal from './components/AddNostrContactModal';
 import NostrProfileView from './components/NostrProfileView';
 import DirectMessagesPage from './pages/DirectMessagesPage'; // Import DM Page
-import { db, Note, NostrProfileNote, DirectMessage, TagPage } from './db/db'; // Added TagPage
+import TagManagementView from './components/TagManagementView'; // Added for Manage Tags
+import { db, Note, NostrProfileNote, DirectMessage, TagPage } from './db/db';
 import * as noteService from './services/noteService';
 import * as nostrProfileService from './services/nostrProfileService';
+import { FullToastProvider, useToastContext } from './contexts/ToastContext'; // Import ToastProvider and useToastContext
+import ToastContainer from './components/ToastContainer'; // Import ToastContainer
 import * as nostrService from './services/nostrService'; // For Kind 3 fetch
 import * as settingsService from './services/settingsService'; // To check for theme and nostr pubkey
 import * as tagPageService from './services/tagPageService'; // Import tagPageService
 import { TagPageWithCount } from './services/tagPageService'; // Import type
+import * as lmCacheService from './services/lmCacheService'; // Added for Clear LM Cache
 
 type ActiveView =
   | { type: 'note'; id: number | null }
@@ -39,10 +45,16 @@ function App() {
 
   const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false); // State for Command Palette
+  const [isTagManagementViewOpen, setIsTagManagementViewOpen] = useState(false); // State for TagManagementView
   const [theme, setTheme] = useState<'light' | 'dark'>(
     localStorage.getItem('theme') as 'light' | 'dark' || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   );
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768); // Open by default on desktop
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isFetchingProfile, setIsFetchingProfile] = useState(false);
+  const { addToast } = useToastContext();
 
   // Keyboard shortcut for Command Palette
   useHotkeys('ctrl+k, cmd+k', (event) => {
@@ -103,65 +115,49 @@ function App() {
   }, [theme, currentSettings?.theme]);
 
 
-  const toggleTheme = () => {
+  function toggleTheme() {
     setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
-  };
+  }
 
-  const commandActions: CommandAction[] = [
-    {
-      id: 'new-note',
-      name: 'New Note',
-      keywords: 'create document text',
-      perform: () => {
-        handleCreateNewNote();
-        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
-      },
-      icon: <DocumentPlusIcon className="w-5 h-5" />,
-    },
-    {
-      id: 'add-nostr-contact',
-      name: 'Add Nostr Contact',
-      keywords: 'profile person new follow',
-      perform: handleCreateNewProfile,
-      icon: <UserPlusIcon className="w-5 h-5" />,
-    },
-    {
-      id: 'open-settings',
-      name: 'Open Settings',
-      keywords: 'preferences configuration options',
-      perform: () => {
-        handleShowSettings();
-        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
-      },
-      icon: <Cog8ToothIcon className="w-5 h-5" />,
-    },
-    {
-      id: 'toggle-theme',
-      name: `Toggle Theme to ${theme === 'light' ? 'Dark' : 'Light'}`,
-      keywords: 'dark light appearance mode style',
-      perform: toggleTheme,
-      icon: theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />,
-    },
-     {
-      id: 'direct-messages',
-      name: 'Direct Messages',
-      keywords: 'dm chat private message',
-      perform: () => {
-        handleShowDirectMessages();
-        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
-      },
-      icon: <ChatBubbleLeftRightIcon className="w-5 h-5" />,
-    },
-    // Future actions:
-    // - Find/Search Notes (would need a way to then display results or integrate with existing search)
-    // - Find/Search Contacts
-    // - Specific LM tools if available
-    // - Insert template/tag (more complex)
-  ];
+  // Define handlers used in commandActions *before* commandActions definition
+  function handleCreateNewNote() {
+    setActiveView({ type: 'new_note_editor' });
+    setCurrentNote(null);
+    setIsEditing(true);
+  }
 
-  // Re-generate commandActions if theme changes so the "Toggle Theme" name and icon updates
-  // This is a bit of a workaround; ideally, CommandPalette would re-render specific items.
-  // However, given the current structure, regenerating the actions array is simpler.
+  function handleCreateNewProfile() {
+    setIsAddContactModalOpen(true);
+  }
+
+  function handleShowSettings() {
+    setActiveView({ type: 'settings' });
+  }
+
+  function handleShowDirectMessages() {
+    setActiveView({ type: 'direct_messages' });
+    setCurrentNote(null); // Clear any active note/profile when switching to DMs
+    setIsEditing(false);
+  }
+
+  function handleShowTagManagementView() {
+    setIsTagManagementViewOpen(true);
+  }
+
+  async function handleClearLmCache() {
+    if (window.confirm("Are you sure you want to clear the LM response cache? This cannot be undone.")) {
+      try {
+        await lmCacheService.clearLMCache();
+        addToast('LM response cache cleared successfully.', 'success');
+      } catch (error) {
+        addToast(`Failed to clear LM cache: ${(error as Error).message}`, 'error');
+        console.error("Failed to clear LM cache:", error);
+      }
+    }
+  }
+
+  // Regenerate commandActions if theme changes so the "Toggle Theme" name and icon updates
+  // Also depends on isSidebarOpen for closing sidebar logic.
   const memoizedCommandActions = React.useMemo(() => [
     {
       id: 'new-note',
@@ -197,17 +193,34 @@ function App() {
       perform: toggleTheme,
       icon: theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />,
     },
-     {
+    {
       id: 'direct-messages',
       name: 'Direct Messages',
-      keywords: 'dm chat private message',
+      keywords: 'dm chat private message nostr',
       perform: () => {
         handleShowDirectMessages();
         if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
       },
       icon: <ChatBubbleLeftRightIcon className="w-5 h-5" />,
     },
-  ], [theme, isSidebarOpen]); // Add isSidebarOpen as dependency if its state affects perform functions indirectly
+    {
+      id: 'manage-tags',
+      name: 'Manage Tags',
+      keywords: 'tags categories labels organize',
+      perform: () => {
+        handleShowTagManagementView();
+        // CommandPalette closes itself, no need to manage sidebar here explicitly for modal
+      },
+      icon: <TagIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'clear-lm-cache',
+      name: 'Clear LM Cache',
+      keywords: 'llm large language model cache memory clear delete reset',
+      perform: handleClearLmCache,
+      icon: <TrashIcon className="w-5 h-5" />,
+    },
+  ], [theme, isSidebarOpen, addToast]); // Added addToast to dependencies
 
 
   // Effect for fetching user's Kind 3 contact list on startup
@@ -256,9 +269,11 @@ function App() {
           }
         } catch (error) {
           console.error("Failed to fetch or process user's Kind 3 contact list:", error);
+           addToast(`Failed to load contacts: ${(error as Error).message}`, 'error');
         }
       } else {
-        console.log("Nostr pubkey not configured, skipping Kind 3 contact list fetch.");
+         // This is a normal operational state, not an error.
+         // console.log("Nostr pubkey not configured, skipping Kind 3 contact list fetch.");
       }
     };
 
@@ -304,22 +319,18 @@ function App() {
           // Stale if not checked in the last 15 minutes, or if nostrProfileService itself would refetch (e.g. > 24h)
           const isStaleByTime = !profile.lastChecked || (Date.now() - new Date(profile.lastChecked).getTime() > 15 * 60 * 1000); // 15 minutes
 
-          // The createOrUpdateProfileNote has its own internal 24h check for fetching.
-          // We trigger an attempt if our shorter 15min window is met,
-          // or rely on its internal logic if it's just to update lastChecked.
           if (isStaleByTime) {
+            setIsFetchingProfile(true);
             try {
-              // Attempt to refresh. The 'true' flag suggests a fetch should be attempted.
-              // The service method itself will decide based on its own more comprehensive staleness rules (e.g. 24h for kind0).
-              // This call will update the DB.
               await nostrProfileService.createOrUpdateProfileNote({ npub: profile.npub }, profile.npub, true);
-
-              // Re-fetch from DB to get the potentially updated profile
               const refreshedProfile = await nostrProfileService.getProfileNoteById(activeView.id);
               setCurrentNote(refreshedProfile || null);
+              // addToast('Profile data refreshed.', 'success'); // Optional: can be noisy
             } catch (error) {
-              console.warn("Failed to automatically refresh profile in App.tsx:", error);
-              // Profile from DB (before refresh attempt) is already set, so UI is consistent
+              console.error("Failed to automatically refresh profile in App.tsx:", error);
+              addToast(`Failed to refresh profile: ${(error as Error).message}`, 'error');
+            } finally {
+              setIsFetchingProfile(false);
             }
           }
         }
@@ -341,21 +352,21 @@ function App() {
     if (!isProfile) setIsEditing(true); // Auto-edit notes
   };
 
-  const handleCreateNewNote = () => {
-    setActiveView({ type: 'new_note_editor' });
-    setCurrentNote(null);
-    setIsEditing(true);
-  };
+  // const handleCreateNewNote = () => { // Moved up
+  //   setActiveView({ type: 'new_note_editor' });
+  //   setCurrentNote(null);
+  //   setIsEditing(true);
+  // };
 
-  const handleCreateNewProfile = () => {
-    setIsAddContactModalOpen(true);
-  };
+  // const handleCreateNewProfile = () => { // Moved up
+  //   setIsAddContactModalOpen(true);
+  // };
 
-  const handleShowDirectMessages = () => {
-    setActiveView({ type: 'direct_messages' });
-    setCurrentNote(null); // Clear any active note/profile when switching to DMs
-    setIsEditing(false);
-  };
+  // const handleShowDirectMessages = () => { // Moved up
+  //   setActiveView({ type: 'direct_messages' });
+  //   setCurrentNote(null); // Clear any active note/profile when switching to DMs
+  //   setIsEditing(false);
+  // };
 
   const handleContactAdded = async (profileId: number) => {
     setIsAddContactModalOpen(false);
@@ -371,42 +382,69 @@ function App() {
   };
 
   const handleSaveNote = async (id: number | undefined, title: string, content: string, tags: string[]) => {
+    setIsSaving(true);
     let itemToSelectAfterSave: Note | NostrProfileNote | null = null;
+    let successMessage = '';
 
-    if (activeView.type === 'profile' && id) {
-      const existingProfile = await nostrProfileService.getProfileNoteById(id);
-      if (existingProfile) {
-        // Convert tags (string names) to tagPageIds for saving
-        const tagPageIds: number[] = [];
-        for (const tagName of tags) {
-          const tagPage = await tagPageService.getTagPageByName(tagName, true);
-          if (tagPage && tagPage.id) {
-            tagPageIds.push(tagPage.id);
+    try {
+      if (activeView.type === 'profile' && id) {
+        const existingProfile = await nostrProfileService.getProfileNoteById(id);
+        if (existingProfile) {
+          const tagPageIds: number[] = [];
+          for (const tagName of tags) {
+            const tagPage = await tagPageService.getTagPageByName(tagName, true);
+            if (tagPage && tagPage.id) {
+              tagPageIds.push(tagPage.id);
+            }
           }
+          await nostrProfileService.createOrUpdateProfileNote({ ...existingProfile, title, content, tagPageIds: [...new Set(tagPageIds)] });
+          itemToSelectAfterSave = await nostrProfileService.getProfileNoteById(id);
+          successMessage = 'Profile saved successfully.';
+        } else {
+          throw new Error('Profile not found for saving.');
         }
-        await nostrProfileService.createOrUpdateProfileNote({ ...existingProfile, title, content, tagPageIds: [...new Set(tagPageIds)] });
-        itemToSelectAfterSave = await nostrProfileService.getProfileNoteById(id);
+      } else if (activeView.type === 'note' || activeView.type === 'new_note_editor') {
+        if (id) {
+          await noteService.updateNote(id, { title, content, tagInput: tags });
+          itemToSelectAfterSave = await noteService.getNoteById(id);
+          successMessage = 'Note updated successfully.';
+        } else {
+          const newNoteId = await noteService.createNote(title, content, tags);
+          itemToSelectAfterSave = await noteService.getNoteById(newNoteId);
+          if (itemToSelectAfterSave) setActiveView({ type: 'note', id: newNoteId });
+          successMessage = 'Note created successfully.';
+        }
       }
-    } else if (activeView.type === 'note' || activeView.type === 'new_note_editor') {
-      if (id) {
-        await noteService.updateNote(id, { title, content, tagInput: tags }); // noteService handles tagInput to tagPageIds conversion
-        itemToSelectAfterSave = await noteService.getNoteById(id);
-      } else {
-        const newNoteId = await noteService.createNote(title, content, tags); // noteService handles tagInput to tagPageIds conversion
-        itemToSelectAfterSave = await noteService.getNoteById(newNoteId);
-        if (itemToSelectAfterSave) setActiveView({ type: 'note', id: newNoteId });
-      }
+      addToast(successMessage, 'success');
+    } catch (error) {
+      console.error('Error saving:', error);
+      addToast(`Error saving: ${(error as Error).message}`, 'error');
+    } finally {
+      setIsSaving(false);
     }
 
     setCurrentNote(itemToSelectAfterSave || null);
-    setIsEditing(false); // Exit editing mode
+    // Only exit editing mode if not creating a new note (which auto-navigates and might stay in edit mode)
+    if (!(activeView.type === 'new_note_editor' && itemToSelectAfterSave)) {
+        setIsEditing(false);
+    }
   };
 
   const handleDeleteNoteOrProfile = async (id: number) => {
-    if (activeView.type === 'note' && activeView.id === id) {
-      await noteService.deleteNote(id);
-    } else if (activeView.type === 'profile' && activeView.id === id) {
-      await nostrProfileService.deleteProfileNoteById(id);
+    setIsDeleting(true);
+    try {
+      if (activeView.type === 'note' && activeView.id === id) {
+        await noteService.deleteNote(id);
+        addToast('Note deleted successfully.', 'success');
+      } else if (activeView.type === 'profile' && activeView.id === id) {
+        await nostrProfileService.deleteProfileNoteById(id);
+        addToast('Profile contact and local notes deleted successfully.', 'success');
+      }
+    } catch (error) {
+      console.error('Error deleting:', error);
+      addToast(`Error deleting: ${(error as Error).message}`, 'error');
+    } finally {
+      setIsDeleting(false);
     }
 
     setCurrentNote(null);
@@ -425,18 +463,22 @@ function App() {
 
   const handleRefetchProfile = async (npub: string) => {
     if (activeView.type === 'profile' && activeView.id) {
-        try {
-            // Force fetch by setting fetchFromRelay to true in createOrUpdateProfileNote
-            await nostrProfileService.createOrUpdateProfileNote({ npub }, npub, true);
-            const updatedProfile = await nostrProfileService.getProfileNoteById(activeView.id);
-            setCurrentNote(updatedProfile || null);
-        } catch (error) {
-            console.error("Error refetching profile:", error);
-        }
+      setIsFetchingProfile(true);
+      try {
+        await nostrProfileService.createOrUpdateProfileNote({ npub }, npub, true);
+        const updatedProfile = await nostrProfileService.getProfileNoteById(activeView.id);
+        setCurrentNote(updatedProfile || null);
+        addToast('Profile data refreshed.', 'success');
+      } catch (error) {
+        console.error("Error refetching profile:", error);
+        addToast(`Failed to refresh profile: ${(error as Error).message}`, 'error');
+      } finally {
+        setIsFetchingProfile(false);
+      }
     }
   };
 
-  const handleShowSettings = () => setActiveView({ type: 'settings' });
+  // const handleShowSettings = () => setActiveView({ type: 'settings' }); // Moved up
   const handleExitSettings = () => {
      // Default to DMs if no other view was active, or to the last note/profile
     if (currentNote && activeView.type !== 'settings') { // activeView might be 'profile' or 'note'
@@ -457,7 +499,8 @@ function App() {
 
 
   return (
-    <>
+    <FullToastProvider>
+      <ToastContainer />
       <AppLayout
         sidebar={{
           notes: notes,
@@ -492,6 +535,9 @@ function App() {
             setIsEditing(true);
           },
           onRefetchProfileData: handleRefetchProfile,
+          isSaving: isSaving,
+          isDeleting: isDeleting,
+          isFetchingProfile: isFetchingProfile, // Pass down
         }}
         onToggleSidebar={toggleSidebar}
       />
@@ -506,7 +552,11 @@ function App() {
         actions={memoizedCommandActions}
         currentTheme={theme}
       />
-    </>
+      <TagManagementView
+        isOpen={isTagManagementViewOpen}
+        onClose={() => setIsTagManagementViewOpen(false)}
+      />
+    </FullToastProvider>
   );
 }
 

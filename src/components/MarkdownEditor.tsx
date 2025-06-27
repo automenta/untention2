@@ -6,6 +6,7 @@ import { Note, NostrProfileNote } from '../db/db';
 import { TrashIcon, ShareIcon as ShareOutlineIcon, CheckIcon } from '@heroicons/react/24/outline';
 import * as tagPageService from '../services/tagPageService'; // Import tagPageService
 import * as nostrProfileService from '../services/nostrProfileService'; // Import nostrProfileService for NOSTR_PROFILE_TAG_NAME
+import Spinner from './Spinner'; // Import Spinner
 
 interface MarkdownEditorProps {
   note: Note | NostrProfileNote | null;
@@ -14,6 +15,8 @@ interface MarkdownEditorProps {
   onShare?: () => void;
   isProfileEditing?: boolean;
   editorKey: string; // Force re-render / re-init when key changes (e.g. new note)
+  isSaving?: boolean;
+  isDeleting?: boolean;
 }
 
 const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
@@ -23,6 +26,8 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   onShare,
   isProfileEditing = false,
   editorKey, // Use this key to re-initialize SimpleMDE when the note fundamentally changes
+  isSaving = false,
+  isDeleting = false,
 }) => {
   const [title, setTitle] = useState('');
   const [currentContent, setCurrentContent] = useState(''); // Content for SimpleMDE
@@ -208,18 +213,20 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
           )}
           <button
             onClick={handleManualSave}
-            className="px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={isSaving || isDeleting}
+            className="px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 flex items-center justify-center min-w-[70px]"
             title="Save (Ctrl+S)"
           >
-            Save
+            {isSaving ? <Spinner size="sm" color="text-white" /> : 'Save'}
           </button>
           {note?.id && onDelete && (
             <button
               onClick={handleDeleteClick}
-              className="p-1.5 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 rounded-md hover:bg-red-100 dark:hover:bg-gray-700"
+              disabled={isSaving || isDeleting}
+              className="p-1.5 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 rounded-md hover:bg-red-100 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center justify-center min-w-[36px] min-h-[36px]"
               title={isProfileEditing ? "Delete Local Alias & Notes" : "Delete Note"}
             >
-              <TrashIcon className="h-5 w-5" />
+              {isDeleting ? <Spinner size="sm" color="text-red-600 dark:text-red-400" /> : <TrashIcon className="h-5 w-5" />}
             </button>
           )}
         </div>

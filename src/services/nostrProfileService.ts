@@ -125,8 +125,32 @@ export const getProfileNoteById = (id: number): Promise<NostrProfileNote | undef
   return db.nostrProfiles.get(id);
 };
 
+import { liveQuery } from 'dexie'; // Ensure liveQuery is imported
+
 export const getAllProfileNotes = () => {
-  return db.nostrProfiles.orderBy('name').toArray();
+  return liveQuery(() =>
+    db.nostrProfiles.orderBy('name').toArray()
+    .then(profiles => profiles.sort((a, b) => { // Sorting here as orderBy might not cover all cases of name/title/npub
+      const nameA = a.name || a.title || a.npub;
+      const nameB = b.name || b.title || b.npub;
+      return nameA.localeCompare(nameB);
+    }))
+  );
+};
+
+// Function to get NostrProfileNotes by a specific TagPage ID
+export const getNostrProfilesByTagPageId = (tagPageId: number) => {
+  return liveQuery(() => // Wrap in liveQuery for consistency
+    db.nostrProfiles
+      .where('tagPageIds')
+      .equals(tagPageId)
+      .toArray()
+      .then(profiles => profiles.sort((a, b) => {
+        const nameA = a.name || a.title || a.npub;
+        const nameB = b.name || b.title || b.npub;
+        return nameA.localeCompare(nameB);
+      }))
+  );
 };
 
 export const deleteProfileNoteById = (id: number): Promise<void> => {

@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA, VitePWAOptions } from 'vite-plugin-pwa'
@@ -90,4 +91,9 @@ export default defineConfig({
     react(),
     VitePWA(pwaOptions)
   ],
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './src/tests/setup.ts', // Optional: if you need global setup
+  }
 })

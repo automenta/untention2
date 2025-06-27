@@ -6,6 +6,7 @@ import LMInteractionArea from './LMInteractionArea';
 import { Note, NostrProfileNote } from '../db/db';
 import { Bars3Icon, XMarkIcon as MenuCloseIcon, ShareIcon, DocumentPlusIcon } from '@heroicons/react/24/outline';
 import ShareModal from './ShareModal';
+import Spinner from './Spinner'; // Import Spinner
 
 // Define a more specific type for activeView in App.tsx and pass it down
 export type ActiveViewType =
@@ -29,11 +30,14 @@ interface MainContentProps {
   ProfileViewComponent: React.FC<any>; // Specific props for NostrProfileView will be spread
   onEditProfileLocalFields: (profileId: number) => void;
   onRefetchProfileData: (npub: string) => void;
+  isSaving?: boolean;
+  isDeleting?: boolean;
+  isFetchingProfile?: boolean; // Added
 }
 
 interface AppLayoutProps {
   sidebar: SidebarProps;
-  mainContent: MainContentProps;
+  mainContent: MainContentProps & { isSaving?: boolean; isDeleting?: boolean; isFetchingProfile?: boolean; isLoadingGlobally?: boolean }; // Added isLoadingGlobally
   onToggleSidebar: () => void;
 }
 
@@ -84,7 +88,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
   const canShare = activeView.type === 'note' && itemToDisplayOrEdit && itemToDisplayOrEdit.id && !('npub' in itemToDisplayOrEdit);
 
   return (
-    <div className="flex h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 overflow-hidden">
+    <div className="flex h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 overflow-hidden relative"> {/* Added relative positioning for global spinner */}
+      {/* Global Loading Spinner */}
+      {mainContent.isLoadingGlobally && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-100 dark:bg-gray-900 bg-opacity-75 dark:bg-opacity-75">
+          <Spinner size="lg" />
+        </div>
+      )}
+
       {/* Mobile Menu Button - standard position */}
        <button
         className="md:hidden fixed top-3 left-3 z-40 p-2 bg-gray-200 dark:bg-gray-700 rounded-md text-gray-700 dark:text-gray-200 shadow"
@@ -139,6 +150,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
                 onDelete={itemToDisplayOrEdit?.id ? handleDelete : undefined}
                 onShare={canShare ? () => setIsShareModalOpen(true) : undefined}
                 isProfileEditing={isProfileActive && isEditing}
+                isSaving={mainContent.isSaving} // Pass down
+                isDeleting={mainContent.isDeleting} // Pass down
               />
               {/* LM Interaction only for actual notes or when editor is up for a new note (not for profile's local notes) */}
               {isNoteActive && !isProfileActive &&
@@ -155,6 +168,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
               onEditLocalFields={onEditProfileLocalFields}
               onDelete={(profileId: number) => onDeleteNoteOrProfile(profileId)}
               onRefetchProfile={onRefetchProfileData}
+              isFetchingProfile={mainContent.isFetchingProfile} // Pass down
             />
           )}
 

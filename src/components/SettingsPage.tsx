@@ -9,6 +9,7 @@ import { nip19 } from 'nostr-tools/nip19';
 import { generateSecretKey } from 'nostr-tools/pure';
 import { EyeIcon, EyeSlashIcon, ArrowPathIcon, UserCircleIcon, ArrowDownTrayIcon, PencilSquareIcon, UsersIcon } from '@heroicons/react/24/outline';
 import NostrContactsManager from './NostrContactsManager'; // Import the new component
+import { useToastContext } from '../contexts/ToastContext'; // Import useToastContext
 
 const availableModels = {
   openai: ["gpt-4", "gpt-4-turbo-preview", "gpt-3.5-turbo"],
@@ -19,6 +20,16 @@ const availableModels = {
 
 const SettingsPage: React.FC = () => {
   const currentSettings = useLiveQuery(settingsService.getSettings(), []) as Settings | undefined;
+
+  interface ValidationErrors {
+    lmApiKey?: string;
+    ollamaBaseUrl?: string;
+    nostrRelayUrl?: string;
+    nostrPrivKey?: string;
+    profilePictureUrl?: string;
+    profileNip05?: string;
+  }
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
 
   const [lmApiKey, setLmApiKey] = useState('');
   const [showLmApiKey, setShowLmApiKey] = useState(false);
@@ -32,12 +43,13 @@ const SettingsPage: React.FC = () => {
   const [nostrPubKey, setNostrPubKey] = useState('');
   const [userNostrProfile, setUserNostrProfile] = useState<Partial<NostrProfileNote>>({});
   const [showProfileManager, setShowProfileManager] = useState(false);
-  const [profileStatusMessage, setProfileStatusMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  // Removed profileStatusMessage state
   const [showContactsManager, setShowContactsManager] = useState(false);
 
 
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  // Removed statusMessage state
+  const { addToast } = useToastContext(); // Use toast context
 
   const deriveAndSetNostrPubKey = useCallback((privKey: string) => {
     if (privKey && privKey.match(/^[a-f0-9]{64}$/)) {
@@ -58,15 +70,14 @@ const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     if (currentSettings) {
-      settingsService.getLmApiKey().then(key => setLmApiKey(key || ''));
+      settingsService.getLmApiKey().then(key => setLmApiKey(key || '')).catch(err => addToast(`Error loading LM API key: ${err.message}`, 'error'));
       settingsService.getNostrPrivKey().then(key => {
         setNostrPrivKey(key || '');
         const derivedPubKey = deriveAndSetNostrPubKey(key || '');
         if (derivedPubKey) {
-          // Attempt to load existing profile from DB once pubkey is known
           loadProfile(nip19.npubEncode(derivedPubKey));
         }
-      });
+      }).catch(err => addToast(`Error loading Nostr private key: ${err.message}`, 'error'));
 
       setLmModel(currentSettings.lmModel || '');
       setOllamaBaseUrl(currentSettings.ollamaBaseUrl || 'http://localhost:11434');
@@ -85,19 +96,69 @@ const SettingsPage: React.FC = () => {
         setSelectedProvider('ollama'); // Default to ollama if base URL is set but no specific model
       }
     }
-  }, [currentSettings]);
+  }, [currentSettings, addToast, deriveAndSetNostrPubKey, loadProfile]); // Added addToast and other dependencies
+
+  const isValidHttpUrl = (string: string): boolean => {
+    if (!string) return true; // Allow empty
+    try {
+      const url = new URL(string);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const isValidWsUrl = (string: string): boolean => {
+    if (!string) return true; // Allow empty
+    try {
+      const url = new URL(string);
+      return url.protocol === "ws:" || url.protocol === "wss:";
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const validateSettings = (): boolean => {
+    const errors: ValidationErrors = {};
+    if ((selectedProvider === 'openai' || selectedProvider === 'anthropic') && !lmApiKey.trim()) {
+      errors.lmApiKey = 'API Key is required for this provider.';
+    }
+    if (selectedProvider === 'ollama' && ollamaBaseUrl.trim() && !isValidHttpUrl(ollamaBaseUrl)) {
+      errors.ollamaBaseUrl = 'Invalid Ollama Base URL. Must be HTTP/HTTPS.';
+    }
+    if (nostrRelayUrl.trim() && !isValidWsUrl(nostrRelayUrl)) {
+      errors.nostrRelayUrl = 'Invalid Relay URL. Must be WS/WSS.';
+    }
+    if (nostrPrivKey.trim() && !/^[a-f0-9]{64}$/.test(nostrPrivKey)) {
+      errors.nostrPrivKey = 'Private key must be a 64-character hex string.';
+    }
+    if (userNostrProfile.picture?.trim() && !isValidHttpUrl(userNostrProfile.picture)) {
+      errors.profilePictureUrl = 'Invalid Picture URL. Must be HTTP/HTTPS.';
+    }
+    if (userNostrProfile.nip05?.trim() && !/.+@.+\..+/.test(userNostrProfile.nip05)) {
+      errors.profileNip05 = 'Invalid NIP-05 format. Should be user@domain.com.';
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleSaveChanges = async () => {
-    setStatusMessage(null);
+    setValidationErrors({}); // Clear previous errors
+    if (!validateSettings()) {
+      addToast('Please correct the validation errors.', 'error');
+      return;
+    }
+
     try {
       let finalNostrPubKey = nostrPubKey;
-      if (nostrPrivKey && !nostrPubKey) { // If new private key is entered, generate corresponding public key
+      if (nostrPrivKey && !nostrPubKey) {
           try {
             finalNostrPubKey = getPublicKey(nostrPrivKey);
-            setNostrPubKey(finalNostrPubKey); // Update state for UI
+            setNostrPubKey(finalNostrPubKey);
           } catch (e) {
              console.error("Invalid Nostr private key format for public key generation.", e);
-             setStatusMessage({type: 'error', text: 'Invalid Nostr private key format.'});
+             addToast('Invalid Nostr private key format.', 'error');
              return;
           }
       }
@@ -111,18 +172,15 @@ const SettingsPage: React.FC = () => {
         nostrPubKey: finalNostrPubKey, // Use potentially derived pubkey
         theme: theme,
       });
-      // Force key re-derivation in service if salt was just created or secret changed (not applicable here with fixed secret)
-      // Refresh model instance in lmService (indirectly handled by lmService re-fetching settings)
-      setStatusMessage({ type: 'success', text: 'Settings saved successfully!' });
-      setTimeout(() => setStatusMessage(null), 3000);
+      addToast('Settings saved successfully!', 'success');
     } catch (error: any) {
-      setStatusMessage({ type: 'error', text: `Failed to save settings: ${error.message}` });
+      addToast(`Failed to save settings: ${error.message}`, 'error');
     }
   };
 
   const loadProfile = useCallback(async (npub: string) => {
     if (!npub) return;
-    setProfileStatusMessage(null);
+    // Removed setProfileStatusMessage(null);
     try {
       let profile = await nostrProfileService.getProfileNoteByNpub(npub);
       if (profile) {
@@ -133,53 +191,50 @@ const SettingsPage: React.FC = () => {
           nip05: profile.nip05 || '',
         });
       } else {
-        // Initialize with empty fields if no profile found locally
         setUserNostrProfile({ name: '', about: '', picture: '', nip05: '' });
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Error loading profile", e);
-      setProfileStatusMessage({ type: 'error', text: 'Failed to load profile.'});
+      addToast(`Failed to load profile: ${e.message}`, 'error');
     }
-  }, []);
+  }, [addToast]);
 
   const handleFetchFullProfileFromRelay = async () => {
     if (!nostrPubKey) {
-      setProfileStatusMessage({ type: 'error', text: 'Nostr Public Key is not set.' });
+      addToast('Nostr Public Key is not set.', 'error');
       return;
     }
-    setProfileStatusMessage({ type: 'success', text: 'Fetching profile from relay...' });
+    addToast('Fetching profile from relay...', 'info');
     try {
       const npub = nip19.npubEncode(nostrPubKey);
       const fetched = await nostrProfileService.fetchProfileFromRelays(npub);
       if (fetched) {
         await nostrProfileService.createOrUpdateProfileNote(
-          { ...fetched, npub: npub }, // pass full fetched data
+          { ...fetched, npub: npub },
           npub,
-          false // Already fetched, just update DB
+          false
         );
-        setUserNostrProfile({ // Update UI form
+        setUserNostrProfile({
           name: fetched.name || '',
           about: fetched.about || '',
           picture: fetched.picture || '',
           nip05: fetched.nip05 || '',
         });
-        setProfileStatusMessage({ type: 'success', text: 'Profile refreshed from relay.' });
+        addToast('Profile refreshed from relay.', 'success');
       } else {
-        setProfileStatusMessage({ type: 'success', text: 'No profile found on relay. You can create one.' });
-        // Keep existing local form data or clear it if desired
-        // setUserNostrProfile({ name: '', about: '', picture: '', nip05: '' });
+        addToast('No profile found on relay. You can create one.', 'info');
       }
     } catch (error: any) {
-      setProfileStatusMessage({ type: 'error', text: `Failed to fetch profile: ${error.message}` });
+      addToast(`Failed to fetch profile: ${error.message}`, 'error');
     }
   };
 
   const handlePublishProfile = async () => {
     if (!nostrPubKey || !nostrPrivKey) {
-      setProfileStatusMessage({ type: 'error', text: 'Nostr keys not configured.' });
+      addToast('Nostr keys not configured.', 'error');
       return;
     }
-    setProfileStatusMessage({ type: 'success', text: 'Publishing profile...' });
+    addToast('Publishing profile...', 'info');
     try {
       const profileContent = {
         name: userNostrProfile.name,
@@ -194,7 +249,6 @@ const SettingsPage: React.FC = () => {
       const publishedEvent = await nostrService.publishProfileEvent(profileContent);
       if (publishedEvent) {
         const npub = nip19.npubEncode(nostrPubKey);
-        // Update local DB with the just published data
         await nostrProfileService.createOrUpdateProfileNote(
           {
             npub: npub,
@@ -202,17 +256,17 @@ const SettingsPage: React.FC = () => {
             picture: profileContent.picture,
             about: profileContent.about,
             nip05: profileContent.nip05,
-            lastChecked: new Date(), // Mark as "fresh"
+            lastChecked: new Date(),
           },
           npub,
-          false // Data is from user input, no need to fetch again
+          false
         );
-        setProfileStatusMessage({ type: 'success', text: 'Profile published successfully!' });
+        addToast('Profile published successfully!', 'success');
       } else {
-        setProfileStatusMessage({ type: 'error', text: 'Failed to publish profile. Check relay connection.' });
+        addToast('Failed to publish profile. Check relay connection.', 'error');
       }
     } catch (error: any) {
-      setProfileStatusMessage({ type: 'error', text: `Error publishing profile: ${error.message}` });
+      addToast(`Error publishing profile: ${error.message}`, 'error');
     }
   };
 
@@ -223,9 +277,10 @@ const SettingsPage: React.FC = () => {
     setNostrPrivKey(newPrivKeyHex);
     const newPubKey = deriveAndSetNostrPubKey(newPrivKeyHex);
     if (newPubKey) {
-        loadProfile(nip19.npubEncode(newPubKey)); // Load profile for new key
+        loadProfile(nip19.npubEncode(newPubKey));
+        addToast('New Nostr keys generated and populated.', 'success');
     } else {
-        setStatusMessage({ type: 'error', text: 'Error generating Nostr keys.' });
+        addToast('Error generating Nostr keys.', 'error');
     }
   };
 
@@ -267,11 +322,7 @@ const SettingsPage: React.FC = () => {
     <div className="p-6 space-y-8 max-w-2xl mx-auto bg-white dark:bg-gray-800 shadow-md rounded-lg">
       <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Settings</h1>
 
-      {statusMessage && (
-        <div className={`p-3 rounded-md text-sm ${statusMessage.type === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
-          {statusMessage.text}
-        </div>
-      )}
+      {/* Removed statusMessage display, toasts will handle it */}
 
       {/* Theme Settings */}
       <section>
@@ -318,7 +369,7 @@ const SettingsPage: React.FC = () => {
               id="lmApiKey"
               value={lmApiKey}
               onChange={(e) => setLmApiKey(e.target.value)}
-              className="w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white pr-10"
+              className={`w-full p-2 border rounded-md shadow-sm dark:bg-gray-700 dark:text-white pr-10 ${validationErrors.lmApiKey ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
               placeholder={`Enter your ${selectedProvider} API Key`}
             />
             <button type="button" onClick={() => setShowLmApiKey(!showLmApiKey)} className="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 dark:text-gray-400 top-6">
@@ -326,6 +377,7 @@ const SettingsPage: React.FC = () => {
             </button>
           </div>
         )}
+        {validationErrors.lmApiKey && <p className="text-xs text-red-500 dark:text-red-400 mt-1">{validationErrors.lmApiKey}</p>}
 
         {selectedProvider && (
           <div className="mb-4">
@@ -365,11 +417,12 @@ const SettingsPage: React.FC = () => {
               id="ollamaBaseUrl"
               value={ollamaBaseUrl}
               onChange={(e) => setOllamaBaseUrl(e.target.value)}
-              className="w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              className={`w-full p-2 border rounded-md shadow-sm dark:bg-gray-700 dark:text-white ${validationErrors.ollamaBaseUrl ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
               placeholder="e.g., http://localhost:11434"
             />
           </div>
         )}
+        {validationErrors.ollamaBaseUrl && <p className="text-xs text-red-500 dark:text-red-400 mt-1">{validationErrors.ollamaBaseUrl}</p>}
       </section>
 
       {/* Nostr Settings */}
@@ -382,9 +435,10 @@ const SettingsPage: React.FC = () => {
             id="nostrRelayUrl"
             value={nostrRelayUrl}
             onChange={(e) => setNostrRelayUrl(e.target.value)}
-            className="w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            className={`w-full p-2 border rounded-md shadow-sm dark:bg-gray-700 dark:text-white ${validationErrors.nostrRelayUrl ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
             placeholder="wss://your.nostr.relay"
           />
+          {validationErrors.nostrRelayUrl && <p className="text-xs text-red-500 dark:text-red-400 mt-1">{validationErrors.nostrRelayUrl}</p>}
         </div>
         <div className="mb-4 relative">
           <label htmlFor="nostrPrivKey" className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Private Key (hex)</label>
@@ -394,7 +448,7 @@ const SettingsPage: React.FC = () => {
               id="nostrPrivKey"
               value={nostrPrivKey}
               onChange={handleNostrPrivKeyChange}
-              className="flex-grow p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white pr-10"
+              className={`flex-grow p-2 border rounded-md shadow-sm dark:bg-gray-700 dark:text-white pr-10 ${validationErrors.nostrPrivKey ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
               placeholder="Enter 64-char hex private key or generate one"
             />
             <button type="button" onClick={() => setShowNostrPrivKey(!showNostrPrivKey)} className="absolute inset-y-0 right-0 mr-[calc(3rem+0.5rem)] px-3 flex items-center text-gray-500 dark:text-gray-400 top-1/2 -translate-y-1/2 transform">
@@ -409,7 +463,7 @@ const SettingsPage: React.FC = () => {
                 <ArrowPathIcon className="h-5 w-5" />
             </button>
           </div>
-
+          {validationErrors.nostrPrivKey && <p className="text-xs text-red-500 dark:text-red-400 mt-1">{validationErrors.nostrPrivKey}</p>}
         </div>
         <div className="mb-4">
           <label htmlFor="nostrPubKey" className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Public Key (hex)</label>
@@ -453,14 +507,10 @@ const SettingsPage: React.FC = () => {
         />
       )}
 
-      {showProfileManager && nostrPubKey && !showContactsManager && ( // Ensure only one manager is shown if both could be active
+      {showProfileManager && nostrPubKey && !showContactsManager && (
         <section className="mt-8 p-4 border-t border-gray-200 dark:border-gray-700">
           <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-3">My Nostr Profile (Kind 0)</h3>
-          {profileStatusMessage && (
-            <div className={`mb-3 p-2 rounded-md text-sm ${profileStatusMessage.type === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200' : 'bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-200'}`}>
-              {profileStatusMessage.text}
-            </div>
-          )}
+          {/* Removed profileStatusMessage display, toasts will handle it */}
           <div className="space-y-4">
             <div>
               <label htmlFor="profileName" className="block text-sm font-medium text-gray-600 dark:text-gray-400">Name</label>
@@ -494,9 +544,10 @@ const SettingsPage: React.FC = () => {
                 id="profilePicture"
                 value={userNostrProfile.picture || ''}
                 onChange={handleProfileInputChange}
-                className="mt-1 w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                className={`mt-1 w-full p-2 border rounded-md shadow-sm dark:bg-gray-700 dark:text-white ${validationErrors.profilePictureUrl ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
                 placeholder="https://example.com/image.png"
               />
+              {validationErrors.profilePictureUrl && <p className="text-xs text-red-500 dark:text-red-400 mt-1">{validationErrors.profilePictureUrl}</p>}
             </div>
             <div>
               <label htmlFor="profileNip05" className="block text-sm font-medium text-gray-600 dark:text-gray-400">NIP-05 Identifier</label>
@@ -506,9 +557,10 @@ const SettingsPage: React.FC = () => {
                 id="profileNip05"
                 value={userNostrProfile.nip05 || ''}
                 onChange={handleProfileInputChange}
-                className="mt-1 w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                className={`mt-1 w-full p-2 border rounded-md shadow-sm dark:bg-gray-700 dark:text-white ${validationErrors.profileNip05 ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
                 placeholder="name@example.com"
               />
+              {validationErrors.profileNip05 && <p className="text-xs text-red-500 dark:text-red-400 mt-1">{validationErrors.profileNip05}</p>}
             </div>
             <div className="flex space-x-3 mt-4">
               <button

@@ -175,7 +175,7 @@ const LMInteractionArea: React.FC<LMInteractionAreaProps> = ({ currentNoteConten
   }
 
   return (
-    <div className="flex flex-col h-full p-3 bg-gray-100 dark:bg-gray-850 border-t dark:border-gray-700/50">
+    <div className="flex flex-col h-full p-3 bg-gray-100 dark:bg-gray-800 border-t dark:border-gray-700"> {/* Adjusted dark bg and border */}
       <div ref={messagesEndRef} className="flex-grow mb-2 space-y-3 overflow-y-auto pr-1">
         {chatHistory.map((msg) => (
           <div key={msg.id} className={`flex ${msg.type === 'human' ? 'justify-end' : 'justify-start'}`}>

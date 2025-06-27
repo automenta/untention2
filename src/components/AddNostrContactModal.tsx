@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import * as nostrProfileService from '../services/nostrProfileService';
 import { XMarkIcon } from '@heroicons/react/24/outline';
+import { useToastContext } from '../contexts/ToastContext'; // Import useToastContext
 
 interface AddNostrContactModalProps {
   isOpen: boolean;
@@ -11,11 +12,12 @@ interface AddNostrContactModalProps {
 const AddNostrContactModal: React.FC<AddNostrContactModalProps> = ({ isOpen, onClose, onContactAdded }) => {
   const [identifier, setIdentifier] = useState(''); // Can be npub or NIP-05
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null); // For input validation errors
+  const { addToast } = useToastContext(); // Use toast context
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setValidationError(null);
     setIsLoading(true);
 
     let npub = identifier;
@@ -23,37 +25,52 @@ const AddNostrContactModal: React.FC<AddNostrContactModalProps> = ({ isOpen, onC
       try {
         const resolvedNpub = await nostrProfileService.resolveNip05ToNpub(identifier);
         if (!resolvedNpub) {
-          setError(`Could not resolve NIP-05 identifier: ${identifier}`);
+          addToast(`Could not resolve NIP-05: ${identifier}`, 'error');
           setIsLoading(false);
           return;
         }
         npub = resolvedNpub;
       } catch (err: any) {
-        setError(`Error resolving NIP-05: ${err.message}`);
+        addToast(`Error resolving NIP-05: ${err.message}`, 'error');
         setIsLoading(false);
         return;
       }
-    } else if (!identifier.startsWith('npub1')) {
-      // Basic validation for npub, can be improved with nostr-tools regex or decode
-      setError('Invalid npub format. Must start with "npub1..." or be a NIP-05 (user@domain.com)');
-      setIsLoading(false);
-      return;
+    } else {
+      try {
+        const decoded = nostrService.nip19.decode(identifier); // Using nostrService's re-exported nip19
+        if (decoded.type !== 'npub') {
+          setValidationError('Invalid npub format. Identifier is not a recognizable npub.');
+          setIsLoading(false);
+          return;
+        }
+        npub = identifier; // It's a valid npub string
+      } catch (e) {
+        setValidationError('Invalid npub format. Must start with "npub1..." or be a NIP-05 (user@domain.com).');
+        setIsLoading(false);
+        return;
+      }
     }
 
     try {
       // Attempt to fetch and store the profile.
       // createOrUpdateProfileNote will fetch from relay if it's a new npub.
-      const profileId = await nostrProfileService.createOrUpdateProfileNote({ title: `Profile: ${npub.substring(0,12)}...` }, npub);
+      // Ensure isContact is true when adding through this modal
+      const profileId = await nostrProfileService.createOrUpdateProfileNote(
+        { title: `Profile: ${npub.substring(0,12)}...`, isContact: true }, // Set isContact to true
+        npub,
+        true // Fetch Kind 0 if new or stale
+      );
       if (profileId) {
+        addToast('Contact added successfully!', 'success');
         onContactAdded(profileId);
         setIdentifier('');
         onClose();
       } else {
-        setError('Failed to add contact. Profile ID not returned.');
+        addToast('Failed to add contact. Profile ID not returned.', 'error');
       }
     } catch (err: any) {
       console.error("Error adding Nostr contact:", err);
-      setError(`Failed to add contact: ${err.message}`);
+      addToast(`Failed to add contact: ${err.message}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -71,7 +88,7 @@ const AddNostrContactModal: React.FC<AddNostrContactModalProps> = ({ isOpen, onC
           </button>
         </div>
 
-        {error && <p className="text-red-500 dark:text-red-400 text-sm mb-3 p-2 bg-red-100 dark:bg-red-900 rounded">{error}</p>}
+        {validationError && <p className="text-red-500 dark:text-red-400 text-sm mb-3 p-2 bg-red-100 dark:bg-red-900 rounded">{validationError}</p>}
 
         <form onSubmit={handleSubmit}>
           <div className="mb-4">

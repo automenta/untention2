@@ -274,6 +274,7 @@ const TagManagementView: React.FC<TagManagementViewProps> = ({ isOpen, onClose }
         </div>
       )}
     </div>
+  </div>
   );
 };
 

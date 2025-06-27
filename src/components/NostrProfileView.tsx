@@ -1,20 +1,28 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { NostrProfileNote } from '../db/db';
 import * as nostrProfileService from '../services/nostrProfileService';
-import { PencilIcon, TrashIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline';
+import { PencilIcon, TrashIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, ArrowPathIcon } from '@heroicons/react/24/outline'; // Added ArrowPathIcon
+import Spinner from './Spinner'; // Import Spinner
 
 interface NostrProfileViewProps {
   profile: NostrProfileNote;
   onEditLocalFields: (profileId: number) => void;
   onDelete: (profileId: number, npub: string) => void;
-  onRefetchProfile: (npub: string) => Promise<void>; // Make it async to await updates
-  // Callback to inform parent about profile update (e.g. after NIP-05 check)
+  onRefetchProfile: (npub: string) => Promise<void>;
   onProfileUpdated?: (updatedProfile: NostrProfileNote) => void;
+  isFetchingProfile?: boolean; // Added
 }
 
 type Nip05Status = 'idle' | 'checking' | 'verified' | 'failed' | 'not_present';
 
-const NostrProfileView: React.FC<NostrProfileViewProps> = ({ profile, onEditLocalFields, onDelete, onRefetchProfile, onProfileUpdated }) => {
+const NostrProfileView: React.FC<NostrProfileViewProps> = ({
+  profile,
+  onEditLocalFields,
+  onDelete,
+  onRefetchProfile,
+  onProfileUpdated,
+  isFetchingProfile = false, // Added
+}) => {
   const [nip05VerificationStatus, setNip05VerificationStatus] = useState<Nip05Status>('idle');
 
   const { id, npub, name, picture, about, nip05, title, content, lastChecked, tags, nip05Verified, nip05VerifiedAt } = profile || {};
@@ -118,13 +126,20 @@ const NostrProfileView: React.FC<NostrProfileViewProps> = ({ profile, onEditLoca
         <div className="flex space-x-2 flex-shrink-0 self-start sm:self-center">
            <button
             onClick={handleRefetch}
-            className="p-2 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 bg-blue-100 dark:bg-blue-900 rounded-md hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors"
+            disabled={isFetchingProfile}
+            className="p-2 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 bg-blue-100 dark:bg-blue-900 rounded-md hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center min-w-[130px]"
             title="Refetch Profile Data from Relay"
           >
-            Refresh Profile
+            {isFetchingProfile ? (
+              <Spinner size="sm" className="mr-2" />
+            ) : (
+              <ArrowPathIcon className="h-4 w-4 mr-1" />
+            )}
+            {isFetchingProfile ? 'Refreshing...' : 'Refresh Profile'}
           </button>
           <button
             onClick={handleEdit}
+            disabled={isFetchingProfile} // Also disable edit if fetching, as data might be stale
             className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             title="Edit local notes for this profile"
           >
