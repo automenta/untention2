@@ -89,7 +89,12 @@ async function decryptData(encryptedBufferWithIv: ArrayBuffer | undefined): Prom
   }
 }
 
-export const getSettings = (): (() => Promise<Settings | undefined>) => {
+// liveQuery returns an Observable.
+// The function passed to useLiveQuery should return a Promise or an Observable.
+// So, getSettings should return an Observable.
+import { Observable } from 'dexie';
+
+export const getSettings = (): Observable<Settings | undefined> => {
   return liveQuery(async () => {
     let settings = await db.settings.get(SETTINGS_ID);
     if (!settings) {

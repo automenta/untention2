@@ -27,6 +27,7 @@ import * as settingsService from './services/settingsService'; // To check for t
 import * as tagPageService from './services/tagPageService'; // Import tagPageService
 import { TagPageWithCount } from './services/tagPageService'; // Import type
 import * as lmCacheService from './services/lmCacheService'; // Added for Clear LM Cache
+import { firstValueFrom } from 'rxjs';
 
 type ActiveView =
   | { type: 'note'; id: number | null }
@@ -64,21 +65,30 @@ function App() {
 
 
   // Live queries
-  const notes = useLiveQuery(
-    () => selectedTagPageId !== null
-      ? noteService.getNotesByTagPageId(selectedTagPageId)
-      : noteService.searchNotes(searchTerm),
-    [searchTerm, selectedTagPageId], []
-  ) || [];
+  const notes: Note[] = useLiveQuery(
+    () => {
+      if (selectedTagPageId !== null) {
+        return noteService.getNotesByTagPageId(selectedTagPageId);
+      } else {
+        return noteService.searchNotes(searchTerm);
+      }
+    },
+    [searchTerm, selectedTagPageId],
+    []
+  );
 
   // Fetch all Nostr profiles. Client-side filter will be applied below if a tag is selected.
-  const allNostrProfiles = useLiveQuery(
-    () => searchTerm
-      ? nostrProfileService.searchProfiles(searchTerm) // Assuming searchProfiles exists
-      : nostrProfileService.getAllProfileNotes(),
-    [searchTerm], // selectedTagPageId is not a direct dependency for the DB query here
+  const allNostrProfiles: NostrProfileNote[] = useLiveQuery(
+    () => {
+      if (searchTerm) {
+        return nostrProfileService.searchProfiles(searchTerm);
+      } else {
+        return nostrProfileService.getAllProfileNotes();
+      }
+    },
+    [searchTerm],
     []
-  ) || [];
+  );
 
   // Apply client-side filtering for Nostr profiles based on selectedTagPageId
   const nostrProfiles = React.useMemo(() => {
@@ -109,10 +119,10 @@ function App() {
       if (currentSettings && currentSettings.theme !== themeToApply) {
         // If settingsService has a theme, and it's different, update settingsService
         // This syncs theme changes from command palette back to settings
-        settingsService.updateSettings({ theme: themeToApply });
+        settingsService.updateSetting({ theme: themeToApply });
       }
     }
-  }, [theme, currentSettings?.theme]);
+  }, [theme, currentSettings]); // currentSettings was currentSettings?.theme, fixed to depend on the object
 
 
   function toggleTheme() {
@@ -449,13 +459,13 @@ function App() {
 
     setCurrentNote(null);
     // Select next available item or clear view
-    const remainingNotes = await noteService.searchNotes(''); // Get all notes
-    const remainingProfiles = await nostrProfileService.getAllProfileNotes();
+    const remainingNotesArray = await firstValueFrom(noteService.searchNotes(''));
+    const remainingProfilesArray = await firstValueFrom(nostrProfileService.getAllProfileNotes());
 
-    if (remainingNotes.length > 0) {
-        setActiveView({ type: 'note', id: remainingNotes[0].id! });
-    } else if (remainingProfiles.length > 0) {
-        setActiveView({ type: 'profile', id: remainingProfiles[0].id! });
+    if (remainingNotesArray.length > 0) {
+        setActiveView({ type: 'note', id: remainingNotesArray[0].id! });
+    } else if (remainingProfilesArray.length > 0) {
+        setActiveView({ type: 'profile', id: remainingProfilesArray[0].id! });
     } else {
         setActiveView({ type: 'note', id: null });
     }

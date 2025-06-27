@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import * as nostrService from '../services/nostrService';
 import * as nostrProfileService from '../services/nostrProfileService';
+import { NostrProfileNote } from '../db/db'; // Import the type
 import { XMarkIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 
 interface ShareModalProps {
@@ -29,7 +30,11 @@ const ShareModal: React.FC<ShareModalProps> = ({
   const [status, setStatus] = useState<string | null>(null);
   const [isNostrReady, setIsNostrReady] = useState(false);
 
-  const nostrProfiles = useLiveQuery(nostrProfileService.getAllProfileNotes, [], []) || [];
+  const nostrProfiles: NostrProfileNote[] = useLiveQuery(
+    nostrProfileService.getAllProfileNotes,
+    [],
+    []
+  );
 
   useEffect(() => {
     if (isOpen) {
