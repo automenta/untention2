@@ -7,14 +7,21 @@ interface NostrProfileViewProps {
   profile: NostrProfileNote;
   onEditLocalFields: (profileId: number) => void;
   onDelete: (profileId: number, npub: string) => void;
-  onRefetchProfile: (npub: string) => Promise<void>; // Make it async to await updates
-  // Callback to inform parent about profile update (e.g. after NIP-05 check)
+  onRefetchProfile: (npub: string) => Promise<void>;
   onProfileUpdated?: (updatedProfile: NostrProfileNote) => void;
+  isFetchingProfile?: boolean; // Added
 }
 
 type Nip05Status = 'idle' | 'checking' | 'verified' | 'failed' | 'not_present';
 
-const NostrProfileView: React.FC<NostrProfileViewProps> = ({ profile, onEditLocalFields, onDelete, onRefetchProfile, onProfileUpdated }) => {
+const NostrProfileView: React.FC<NostrProfileViewProps> = ({
+  profile,
+  onEditLocalFields,
+  onDelete,
+  onRefetchProfile,
+  onProfileUpdated,
+  isFetchingProfile = false, // Added
+}) => {
   const [nip05VerificationStatus, setNip05VerificationStatus] = useState<Nip05Status>('idle');
 
   const { id, npub, name, picture, about, nip05, title, content, lastChecked, tags, nip05Verified, nip05VerifiedAt } = profile || {};
@@ -118,13 +125,22 @@ const NostrProfileView: React.FC<NostrProfileViewProps> = ({ profile, onEditLoca
         <div className="flex space-x-2 flex-shrink-0 self-start sm:self-center">
            <button
             onClick={handleRefetch}
-            className="p-2 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 bg-blue-100 dark:bg-blue-900 rounded-md hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors"
+            disabled={isFetchingProfile}
+            className="p-2 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 bg-blue-100 dark:bg-blue-900 rounded-md hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors disabled:opacity-50"
             title="Refetch Profile Data from Relay"
           >
-            Refresh Profile
+            {isFetchingProfile ? (
+              <span className="flex items-center">
+                <ClockIcon className="h-4 w-4 mr-1 animate-spin" />
+                Refreshing...
+              </span>
+            ) : (
+              'Refresh Profile'
+            )}
           </button>
           <button
             onClick={handleEdit}
+            disabled={isFetchingProfile}
             className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             title="Edit local notes for this profile"
           >

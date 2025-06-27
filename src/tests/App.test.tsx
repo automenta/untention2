@@ -1,6 +1,7 @@
 import { render, screen, act } from '@testing-library/react';
 import App from '../App';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { FullToastProvider } from '../contexts/ToastContext';
 
 // Mock services and hooks
 vi.mock('../db/db', () => ({
@@ -146,7 +147,11 @@ describe('App Component', () => {
 
   it('renders without crashing', async () => {
     await act(async () => {
-      render(<App />);
+      render(
+        <FullToastProvider>
+          <App />
+        </FullToastProvider>
+      );
     });
     // Check for a high-level element rendered by App or its direct children (mocked or real)
     // Since AppLayout is mocked, we can check for its mock content.

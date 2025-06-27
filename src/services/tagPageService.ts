@@ -114,15 +114,38 @@ export const renameTagPage = async (tagPageId: number, newName: string): Promise
     const existingTagWithNewName = await db.tagPages.where('name').equalsIgnoreCase(trimmedNewName).first();
     if (existingTagWithNewName && existingTagWithNewName.id !== tagPageId) {
         // This means we are trying to rename to a name that already exists for a *different* tag.
-        // This should ideally be a "merge" operation.
-        // For now, we'll throw an error to prevent accidental data issues.
-        // The UI should warn about this and guide the user.
-        // A true merge would involve updating all notes linked to tagPageId to point to existingTagWithNewName.id,
-        // and then deleting the TagPage with tagPageId.
-        throw new Error(`Cannot rename: Tag '${trimmedNewName}' already exists.`);
-    }
+    // This is a "merge" operation.
+    // 1. Re-assign all items (notes, nostrProfiles) from the old tagPage (tagPageId) to the existingTagWithNewName.id
+    // 2. Delete the old tagPage (tagPageId).
 
+    const targetTagPageId = existingTagWithNewName.id!;
+
+    // Update notes
+    const notesToUpdate = await db.notes.where('tagPageIds').equals(tagPageId).toArray();
+    const noteUpdatePromises = notesToUpdate.map(note => {
+      const newTagPageIds = new Set(note.tagPageIds?.filter(id => id !== tagPageId) || []);
+      newTagPageIds.add(targetTagPageId);
+      return db.notes.update(note.id!, { tagPageIds: Array.from(newTagPageIds), updatedAt: new Date() });
+    });
+    await Promise.all(noteUpdatePromises);
+
+    // Update nostrProfiles
+    const profilesToUpdate = await db.nostrProfiles.where('tagPageIds').equals(tagPageId).toArray();
+    const profileUpdatePromises = profilesToUpdate.map(profile => {
+      const newTagPageIds = new Set(profile.tagPageIds?.filter(id => id !== tagPageId) || []);
+      newTagPageIds.add(targetTagPageId);
+      return db.nostrProfiles.update(profile.id!, { tagPageIds: Array.from(newTagPageIds), updatedAt: new Date() });
+    });
+    await Promise.all(profileUpdatePromises);
+
+    // Delete the old TagPage
+    await db.tagPages.delete(tagPageId);
+    // No need to update item counts here, getAllTagPagesWithItemCounts will recalculate.
+    // UI should refresh.
+  } else {
+    // No conflict, or renaming to self (e.g. case change), just update the name
     await db.tagPages.update(tagPageId, { name: trimmedNewName, updatedAt: new Date() });
+    }
 };
 
 export const deleteTagPageAndUnlink = async (tagPageId: number): Promise<void> => {

@@ -29,11 +29,14 @@ interface MainContentProps {
   ProfileViewComponent: React.FC<any>; // Specific props for NostrProfileView will be spread
   onEditProfileLocalFields: (profileId: number) => void;
   onRefetchProfileData: (npub: string) => void;
+  isSaving?: boolean;
+  isDeleting?: boolean;
+  isFetchingProfile?: boolean; // Added
 }
 
 interface AppLayoutProps {
   sidebar: SidebarProps;
-  mainContent: MainContentProps;
+  mainContent: MainContentProps & { isSaving?: boolean; isDeleting?: boolean; isFetchingProfile?: boolean };
   onToggleSidebar: () => void;
 }
 
@@ -139,6 +142,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
                 onDelete={itemToDisplayOrEdit?.id ? handleDelete : undefined}
                 onShare={canShare ? () => setIsShareModalOpen(true) : undefined}
                 isProfileEditing={isProfileActive && isEditing}
+                isSaving={mainContent.isSaving} // Pass down
+                isDeleting={mainContent.isDeleting} // Pass down
               />
               {/* LM Interaction only for actual notes or when editor is up for a new note (not for profile's local notes) */}
               {isNoteActive && !isProfileActive &&
@@ -155,6 +160,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
               onEditLocalFields={onEditProfileLocalFields}
               onDelete={(profileId: number) => onDeleteNoteOrProfile(profileId)}
               onRefetchProfile={onRefetchProfileData}
+              isFetchingProfile={mainContent.isFetchingProfile} // Pass down
             />
           )}
 
