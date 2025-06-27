@@ -2,11 +2,11 @@ import React, { useState, useEffect, useRef, ReactNode } from 'react';
 import {
   MagnifyingGlassIcon,
   XMarkIcon,
-  DocumentPlusIcon,
-  UserPlusIcon,
-  Cog8ToothIcon,
-  SunIcon,
-  MoonIcon,
+  // DocumentPlusIcon, // Unused
+  // UserPlusIcon, // Unused
+  // Cog8ToothIcon, // Unused
+  // SunIcon, // Unused
+  // MoonIcon, // Unused
 } from '@heroicons/react/24/outline';
 
 // Define the structure for a command action
@@ -24,11 +24,11 @@ interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
   actions: CommandAction[];
-  // Current theme needed for toggle theme icon
-  currentTheme?: 'light' | 'dark';
+  // Current theme needed for toggle theme icon -- removed as it's not used in this component directly
+  // currentTheme?: 'light' | 'dark';
 }
 
-const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, actions, currentTheme }) => {
+const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, actions }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredActions, setFilteredActions] = useState<CommandAction[]>(actions);
   const [selectedIndex, setSelectedIndex] = useState(0);

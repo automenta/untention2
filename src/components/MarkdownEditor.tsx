@@ -41,7 +41,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
 
   const simpleMdeInstance = useRef<SimpleMDE | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
-  const titleInputRef = useRef<HTMLInputElement | null>(0);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
 
   const initializeEditor = useCallback((initialContentValue: string) => {
     if (simpleMdeInstance.current) {

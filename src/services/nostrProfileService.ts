@@ -1,5 +1,5 @@
 import { db, NostrProfileNote } from '../db/db';
-import { Event, nip19, Filter } from 'nostr-tools';
+import { nip19, Filter } from 'nostr-tools'; // Event removed
 import * as nostrService from './nostrService'; // For relay connection using SimplePool
 import { queryProfile as nip05QueryProfile } from 'nostr-tools/nip05'; // NIP-05 utility
 import { Observable } from 'dexie'; // Added for searchProfiles return type
@@ -76,29 +76,36 @@ export const createOrUpdateProfileNote = async (
     fetchedProfileData.lastChecked = existingProfile?.lastChecked || new Date();
   }
 
+  // Determine default title, content, createdAt for a new profile or ensure existing ones are carried over.
+  const defaultTitle = targetNpub.substring(0, 10);
+  const baseTitle = profileData.title || fetchedProfileData.name || existingProfile?.title || defaultTitle;
+  const baseContent = profileData.content || fetchedProfileData.about || existingProfile?.content || '';
+  const baseCreatedAt = existingProfile?.createdAt || new Date();
 
   const finalProfileData: NostrProfileNote = {
-    ...(existingProfile || {}), // Base with existing data or empty object
-    ...fetchedProfileData,      // Apply fetched data (includes lastChecked, potentially NIP-05 verification)
-    ...profileData,            // Apply provided data (overrides fetched if conflicts, e.g. local alias)
-    npub: targetNpub,          // Ensure npub is set
+    // Start with required fields from Note, ensuring they are strings.
+    title: baseTitle,
+    content: baseContent,
+    createdAt: baseCreatedAt,
+    // Spread existing profile first if it exists, to carry over all its fields
+    ...(existingProfile || {}),
+    // Then spread fetched data
+    ...fetchedProfileData,
+    // Then spread incoming partial data, which can override
+    ...profileData,
+    // Ensure these crucial fields are correctly set and typed
+    npub: targetNpub,
     updatedAt: new Date(),
   };
 
-  // Ensure essential Note fields if creating new
-  if (!existingProfile) {
-    finalProfileData.title = profileData.title || fetchedProfileData.name || targetNpub.substring(0, 10);
-    finalProfileData.content = profileData.content || fetchedProfileData.about || ''; // Local notes content
-    finalProfileData.createdAt = new Date();
-  } else {
-    // If we fetched new data and the user didn't provide a specific title/content, update them from profile
-    // Only update title from fetched name if title wasn't explicitly provided in profileData
-    if (fetchedProfileData.name && !profileData.title && finalProfileData.title === (existingProfile.title || existingProfile.npub.substring(0,10))) {
-        finalProfileData.title = fetchedProfileData.name;
+  // If it's an existing profile, and title/content were not part of profileData (explicit override)
+  // but were part of fetchedProfileData, allow fetchedProfileData to take precedence over existingProfile's.
+  if (existingProfile) {
+    if (fetchedProfileData.name && !profileData.title) {
+      finalProfileData.title = fetchedProfileData.name;
     }
-    // Only update content from fetched about if content wasn't explicitly provided in profileData
-     if (fetchedProfileData.about && !profileData.content && finalProfileData.content === existingProfile.content) {
-        finalProfileData.content = fetchedProfileData.about; // Local notes content can mirror 'about' if not set
+    if (fetchedProfileData.about && !profileData.content) {
+      finalProfileData.content = fetchedProfileData.about;
     }
   }
 
@@ -109,8 +116,8 @@ export const createOrUpdateProfileNote = async (
   finalProfileData.tagPageIds = Array.from(currentTagPageIds);
 
 
-  if (existingProfile?.id) {
-    await db.nostrProfiles.update(existingProfile.id, finalProfileData);
+  if (existingProfile?.id !== undefined) { // Ensure ID is a number
+    await db.nostrProfiles.update(existingProfile.id as any, finalProfileData); // Cast id to any
     return existingProfile.id;
   } else {
     const { id, ...dataToInsert } = finalProfileData; // Ensure no 'id' is passed for new entries
@@ -122,8 +129,9 @@ export const getProfileNoteByNpub = (npub: string): Promise<NostrProfileNote | u
   return db.nostrProfiles.where('npub').equals(npub).first();
 };
 
-export const getProfileNoteById = (id: number): Promise<NostrProfileNote | undefined> => {
-  return db.nostrProfiles.get(id);
+export const getProfileNoteById = async (id: number): Promise<NostrProfileNote | null> => {
+  const profile = await db.nostrProfiles.get(id);
+  return profile || null;
 };
 
 import { liveQuery } from 'dexie'; // Ensure liveQuery is imported

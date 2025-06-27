@@ -25,7 +25,9 @@ interface ToastProviderProps {
 }
 
 export const ToastProvider: React.FC<ToastProviderProps> = ({ children }) => {
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // const [toasts, setToasts] = useState<ToastMessage[]>([]); // Original 'toasts' unused if only addToast is provided
+  const [, setToasts] = useState<ToastMessage[]>([]);
+
 
   const addToast = useCallback((message: string, type: ToastMessage['type'] = 'info') => {
     const id = Math.random().toString(36).substr(2, 9);

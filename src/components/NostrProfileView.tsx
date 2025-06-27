@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { NostrProfileNote } from '../db/db';
+import { NostrProfileNote, TagPage } from '../db/db'; // Added TagPage for type
 import * as nostrProfileService from '../services/nostrProfileService';
+import * as tagPageService from '../services/tagPageService'; // Import tagPageService
 import { PencilIcon, TrashIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, ArrowPathIcon } from '@heroicons/react/24/outline'; // Added ArrowPathIcon
 import Spinner from './Spinner'; // Import Spinner
 
@@ -24,8 +25,21 @@ const NostrProfileView: React.FC<NostrProfileViewProps> = ({
   isFetchingProfile = false, // Added
 }) => {
   const [nip05VerificationStatus, setNip05VerificationStatus] = useState<Nip05Status>('idle');
+  const [displayTags, setDisplayTags] = useState<string[]>([]);
 
-  const { id, npub, name, picture, about, nip05, title, content, lastChecked, tags, nip05Verified, nip05VerifiedAt } = profile || {};
+  const { id, npub, name, picture, about, nip05, title, content, lastChecked, tagPageIds, nip05Verified, nip05VerifiedAt } = profile || {};
+
+  useEffect(() => {
+    const fetchTags = async () => {
+      if (tagPageIds && tagPageIds.length > 0) {
+        const fetchedTagPages: TagPage[] = await tagPageService.getTagPagesByIds(tagPageIds); // Use tagPageService
+        setDisplayTags(fetchedTagPages.map((tp: TagPage) => tp.name).filter((tName: string) => tName !== nostrProfileService.NOSTR_PROFILE_TAG_NAME));
+      } else {
+        setDisplayTags([]);
+      }
+    };
+    fetchTags();
+  }, [tagPageIds]);
 
   const verifyNip05Identifier = useCallback(async () => {
     if (!nip05 || !npub) {
@@ -185,11 +199,11 @@ const NostrProfileView: React.FC<NostrProfileViewProps> = ({
         )}
       </section>
 
-      {tags && tags.length > 0 && (
+      {displayTags && displayTags.length > 0 && (
         <section>
           <h3 className="text-md font-semibold text-gray-700 dark:text-gray-300 mb-1">Tags:</h3>
           <div className="flex flex-wrap gap-2">
-            {tags.filter(t => t !== 'nostrProfile').map(tag => ( // Exclude default 'nostrProfile' tag
+            {displayTags.map(tag => (
               <span key={tag} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded-full">
                 {tag}
               </span>

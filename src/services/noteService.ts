@@ -1,7 +1,7 @@
-import { db, Note } from '../db/db';
+import { db, Note, TagPage } from '../db/db'; // Import TagPage
 import { liveQuery, Observable } from 'dexie';
 import * as tagPageService from './tagPageService'; // Import the new service
-import { firstValueFrom } from 'rxjs'; // Import firstValueFrom for converting Observable to Promise
+// import { firstValueFrom } from 'rxjs'; // Removed unused import
 
 export const createNote = async (title: string, content: string, tagInput: string[] = []): Promise<number> => {
   const tagPageIds: number[] = [];
@@ -21,11 +21,12 @@ export const createNote = async (title: string, content: string, tagInput: strin
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  return db.notes.add(newNote);
+  return db.notes.add(newNote) as Promise<number>; // Cast return type
 };
 
-export const getNoteById = (id: number): Promise<Note | undefined> => {
-  return db.notes.get(id);
+export const getNoteById = async (id: number): Promise<Note | null> => {
+  const note = await db.notes.get(id);
+  return note || null;
 };
 
 export const updateNote = async (id: number, updates: Partial<Note> & { tagInput?: string[] }): Promise<number> => {
@@ -105,10 +106,71 @@ export const getNotesByTagPageId = (tagPageId: number) => {
 // getAllTags now sources its names from tagPageService
 export const getAllTags = (): Observable<string[]> => {
   return liveQuery(async () => {
-    // Use firstValueFrom to convert the Observable from tagPageService into a Promise
-    // that can be awaited within this async liveQuery function.
-    const currentTagPagesWithCounts = await firstValueFrom(tagPageService.getAllTagPagesWithItemCounts());
+    // Directly await the result of the Dexie liveQuery observable from the service.
+    // This works because we are inside another liveQuery's async function.
+    // Dexie automatically subscribes to nested live queries.
+    // const tagPagesWithCountsObservable = tagPageService.getAllTagPagesWithItemCounts(); // Unused variable
+    // To get the actual data from a Dexie observable inside a liveQuery,
+    // you typically don't await firstValueFrom (that's for RxJS).
+    // Instead, you'd structure it so Dexie handles the reactivity.
+    // However, if you need a snapshot, you can use `await observablePromise(observable)`
+    // But here, we want live updates.
+    // A cleaner way if getAllTagPagesWithItemCounts is a liveQuery:
+    // const allTagPages = await db.tagPages.orderBy('name').toArray(); // (Example, adapt to actual logic)
+    // For now, to fix the immediate error with firstValueFrom on a Dexie observable:
+    // We need to get a promise from the Dexie observable for one-time use if not in a reactive chain.
+    // Since this IS a liveQuery, we can re-evaluate how it consumes other liveQueries.
+    // The simplest for now, if tagPageService.getAllTagPagesWithItemCounts() IS a dexie live observable,
+    // is to call it and let dexie manage dependencies.
+    // The issue is `firstValueFrom` expects an RxJS observable.
+    // The `tagPageService.getAllTagPagesWithItemCounts()` returns a Dexie observable.
 
-    return currentTagPagesWithCounts.map(tp => tp.name).sort((a,b) => a.localeCompare(b));
+    // Correct approach: if `tagPageService.getAllTagPagesWithItemCounts` returns a Dexie Observable,
+    // and `getAllTags` is also a liveQuery, Dexie will handle the dependency.
+    // The error was `firstValueFrom` on a non-RxJS observable.
+    // We just need to get the current value.
+    // A direct call to the function that returns the Dexie observable is enough inside liveQuery.
+
+    // Let's assume tagPageService.getAllTagPagesWithItemCounts() returns the array directly for this snapshot logic,
+    // or we adjust tagPageService to return a promise for one-time get if getAllTags is not live.
+    // Given getAllTags IS liveQuery, it should depend on the liveQuery from tagPageService.
+    // The `await firstValueFrom` was the error. We should just call it.
+    // However, tagPageService.getAllTagPagesWithItemCounts() returns an Observable.
+    // A simple way to get the current value of a dexie observable is not straightforward without firstValueFrom (for RxJS) or custom logic.
+
+    // Simplest fix: Re-implement the logic of getAllTagPagesWithItemCounts here if getAllTags needs to be live and depend on its parts.
+    // OR, if getAllTags doesn't need to be live itself but just transform data, it shouldn't use liveQuery.
+
+    // Assuming getAllTags itself should be live based on changes to TagPages or Notes:
+    const allTagPages = await db.tagPages.orderBy('name').toArray();
+    const allNotes = await db.notes.toArray();
+    const allNostrProfileNotes = await db.nostrProfiles.toArray();
+
+    const tagCounts = new Map<number, number>();
+    allNotes.forEach(note => {
+      if (note.tagPageIds) {
+        note.tagPageIds.forEach(id => {
+          tagCounts.set(id, (tagCounts.get(id) || 0) + 1);
+        });
+      }
+    });
+    allNostrProfileNotes.forEach(profile => {
+        if (profile.tagPageIds) {
+            profile.tagPageIds.forEach(id => {
+                tagCounts.set(id, (tagCounts.get(id) || 0) + 1);
+            });
+        }
+    });
+
+    // allTagPages is TagPage[]. We are mapping to TagPageWithCount[]
+    const tagPagesWithCountsData: tagPageService.TagPageWithCount[] = allTagPages.map((tp: TagPage) => ({
+      id: tp.id!,
+      name: tp.name,
+      count: tagCounts.get(tp.id!) || 0,
+      createdAt: tp.createdAt,
+      updatedAt: tp.updatedAt,
+    }));
+
+    return tagPagesWithCountsData.map((tp: tagPageService.TagPageWithCount) => tp.name).sort((a: string, b: string) => a.localeCompare(b));
   });
 };

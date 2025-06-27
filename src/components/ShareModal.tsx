@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
+// import { Observable } from 'rxjs'; // No longer needed due to casting useLiveQuery result
 import * as nostrService from '../services/nostrService';
 import * as nostrProfileService from '../services/nostrProfileService';
 import { NostrProfileNote } from '../db/db'; // Import the type
@@ -27,14 +28,15 @@ const ShareModal: React.FC<ShareModalProps> = ({
   const [customNpubInput, setCustomNpubInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Removed duplicated block from line 28 to 44
   const [status, setStatus] = useState<string | null>(null);
   const [isNostrReady, setIsNostrReady] = useState(false);
 
-  const nostrProfiles: NostrProfileNote[] = useLiveQuery(
-    nostrProfileService.getAllProfileNotes,
+  const nostrProfiles = (useLiveQuery(
+    () => nostrProfileService.getAllProfileNotes(), // This service method returns a Dexie LiveQuery Observable
     [],
-    []
-  );
+    [] // Initial empty array
+  ) || []) as NostrProfileNote[];
 
   useEffect(() => {
     if (isOpen) {
@@ -43,7 +45,7 @@ const ShareModal: React.FC<ShareModalProps> = ({
       setStatus(null);
       // Keep selectedNpub or customNpubInput as user might be correcting an error
       // setIsPublic(true); // Don't reset this, user might want to retry private
-      nostrService.isNostrConfigured().then(setIsNostrReady);
+      nostrService.isNostrUserConfigured().then(setIsNostrReady); // Corrected: isNostrUserConfigured
     }
   }, [isOpen]);
 
@@ -86,12 +88,33 @@ const ShareModal: React.FC<ShareModalProps> = ({
 
     try {
       setStatus(isPublic ? 'Publishing public note...' : 'Encrypting and publishing private note...');
-      const publishedEvent = await nostrService.publishNoteEvent(
-        contentToShare,
-        nostrEventTags,
-        isPublic,
-        finalRecipientPubKeyHex
-      );
+      let publishedEvent: import('nostr-tools').Event | null = null;
+
+      if (isPublic) {
+        // For public notes, tags are passed directly.
+        publishedEvent = await nostrService.publishKind1Note(
+          contentToShare,
+          nostrEventTags // Pass existing tags for Kind 1
+        );
+      } else {
+        // For private (Kind 4) messages
+        if (!finalRecipientPubKeyHex) {
+          setError('Recipient public key is required for private sharing.');
+          setIsLoading(false);
+          setStatus(null);
+          return;
+        }
+        // sendEncryptedDirectMessage handles NIP-04 encryption and adds the necessary 'p' tag.
+        // It does not typically take arbitrary other tags like 't' for topics.
+        // If arbitrary tags are needed for DMs, the sendEncryptedDirectMessage or publishEvent
+        // structure would need modification (e.g. by adding them to the EventTemplate before signing).
+        // For now, we assume noteTags are primarily for Kind 1.
+        // If you want to include subject or other tags in DMs, they'd usually be part of the encrypted content or specific NIP.
+        publishedEvent = await nostrService.sendEncryptedDirectMessage(
+          finalRecipientPubKeyHex,
+          contentToShare // Plaintext content, service encrypts
+        );
+      }
 
       if (publishedEvent) {
         setStatus(`Successfully shared! Event ID: ${publishedEvent.id.substring(0,10)}...`);

@@ -1,5 +1,5 @@
 import { db, Settings } from '../db/db';
-import { liveQuery } from 'dexie';
+import { liveQuery, Observable } from 'dexie'; // Moved Observable here
 
 const SETTINGS_ID = 1;
 const KEY_DERIVATION_SECRET = "notention-app-secret";
@@ -92,7 +92,7 @@ async function decryptData(encryptedBufferWithIv: ArrayBuffer | undefined): Prom
 // liveQuery returns an Observable.
 // The function passed to useLiveQuery should return a Promise or an Observable.
 // So, getSettings should return an Observable.
-import { Observable } from 'dexie';
+// import { Observable } from 'dexie'; // Moved to top
 
 export const getSettings = (): Observable<Settings | undefined> => {
   return liveQuery(async () => {

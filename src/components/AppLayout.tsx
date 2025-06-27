@@ -200,9 +200,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ sidebar, mainContent, onToggleSid
       {isShareModalOpen && itemToDisplayOrEdit && canShare && (
         <ShareModal
           // Pass only necessary fields for a Note to ShareModal
-          noteTitle={itemToDisplayOrEdit.title}
-          noteContent={itemToDisplayOrEdit.content}
-          noteTags={itemToDisplayOrEdit.tags}
+          noteTitle={itemToDisplayOrEdit.title!}
+          noteContent={itemToDisplayOrEdit.content!}
+          noteTags={ (itemToDisplayOrEdit as Note).tagPageIds ? [] : [] } // TODO: Fetch actual tag names from tagPageIds for sharing
           isOpen={isShareModalOpen}
           onClose={() => setIsShareModalOpen(false)}
            onShared={(eventId) => { console.log("Note shared with event ID:", eventId);}} // Placeholder

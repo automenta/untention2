@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, NostrProfileNote } from '../db/db';
+import { db } from '../db/db'; // NostrProfileNote is not directly used here, but through db.nostrProfiles
 import * as nostrService from '../services/nostrService';
-import * as settingsService from '../services/settingsService';
+// import * as settingsService from '../services/settingsService'; // Unused
 import * as nostrProfileService from '../services/nostrProfileService';
 import { nip19, Event } from 'nostr-tools';
 import { ArrowDownTrayIcon, ArrowUpTrayIcon, ArrowPathIcon, UserPlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';

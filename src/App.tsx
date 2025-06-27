@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import AppLayout from './components/AppLayout';
-import CommandPalette, { CommandAction } from './components/CommandPalette'; // Import CommandPalette
+import CommandPalette from './components/CommandPalette'; // Import CommandPalette
 import {
   DocumentPlusIcon,
   UserPlusIcon,
@@ -17,7 +17,7 @@ import AddNostrContactModal from './components/AddNostrContactModal';
 import NostrProfileView from './components/NostrProfileView';
 import DirectMessagesPage from './pages/DirectMessagesPage'; // Import DM Page
 import TagManagementView from './components/TagManagementView'; // Added for Manage Tags
-import { db, Note, NostrProfileNote, DirectMessage, TagPage } from './db/db';
+import { Note, NostrProfileNote, Settings as DBSettings } from './db/db'; // Import Settings as DBSettings
 import * as noteService from './services/noteService';
 import * as nostrProfileService from './services/nostrProfileService';
 import { FullToastProvider, useToastContext } from './contexts/ToastContext'; // Import ToastProvider and useToastContext
@@ -25,9 +25,9 @@ import ToastContainer from './components/ToastContainer'; // Import ToastContain
 import * as nostrService from './services/nostrService'; // For Kind 3 fetch
 import * as settingsService from './services/settingsService'; // To check for theme and nostr pubkey
 import * as tagPageService from './services/tagPageService'; // Import tagPageService
-import { TagPageWithCount } from './services/tagPageService'; // Import type
+// import { TagPageWithCount } from './services/tagPageService'; // Import type - This type is used for allTagPagesWithCounts, but it's inferred
 import * as lmCacheService from './services/lmCacheService'; // Added for Clear LM Cache
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, Observable } from 'rxjs';
 
 type ActiveView =
   | { type: 'note'; id: number | null }
@@ -57,6 +57,9 @@ function App() {
   const [isFetchingProfile, setIsFetchingProfile] = useState(false);
   const { addToast } = useToastContext();
 
+  // type Settings should be imported from db/db
+  // import { Settings } from './db/db'; // This line would be at the top
+
   // Keyboard shortcut for Command Palette
   useHotkeys('ctrl+k, cmd+k', (event) => {
     event.preventDefault(); // Prevent browser's default find action or other conflicts
@@ -65,7 +68,7 @@ function App() {
 
 
   // Live queries
-  const notes: Note[] = useLiveQuery(
+  const notes = (useLiveQuery(
     () => {
       if (selectedTagPageId !== null) {
         return noteService.getNotesByTagPageId(selectedTagPageId);
@@ -74,11 +77,11 @@ function App() {
       }
     },
     [searchTerm, selectedTagPageId],
-    []
-  );
+    [] // Initial empty array
+  ) || []) as Note[];
 
   // Fetch all Nostr profiles. Client-side filter will be applied below if a tag is selected.
-  const allNostrProfiles: NostrProfileNote[] = useLiveQuery(
+  const allNostrProfiles = (useLiveQuery(
     () => {
       if (searchTerm) {
         return nostrProfileService.searchProfiles(searchTerm);
@@ -87,8 +90,8 @@ function App() {
       }
     },
     [searchTerm],
-    []
-  );
+    [] // Initial empty array
+  ) || []) as NostrProfileNote[];
 
   // Apply client-side filtering for Nostr profiles based on selectedTagPageId
   const nostrProfiles = React.useMemo(() => {
@@ -102,13 +105,17 @@ function App() {
 
 
   // Fetch all TagPages with their item counts for the sidebar
-  const allTagPagesWithCounts = useLiveQuery(
-    tagPageService.getAllTagPagesWithItemCounts,
+  const allTagPagesWithCounts = (useLiveQuery(
+    () => tagPageService.getAllTagPagesWithItemCounts(),
     [], // No direct dependencies for the query itself, liveQuery handles updates from Dexie
     [] // Initial empty array
-  ) || [];
+  ) || []) as tagPageService.TagPageWithCount[];
 
-  const currentSettings = useLiveQuery(settingsService.getSettings, []);
+  const currentSettings = useLiveQuery(
+    () => settingsService.getSettings(), // Directly use the service method if it returns Dexie's LiveQuery Observable
+    [],
+    undefined // Initial value for Settings | undefined
+  ) as DBSettings | undefined;
 
   useEffect(() => {
     // Apply theme from settings OR local theme state
@@ -301,41 +308,42 @@ function App() {
 
   useEffect(() => {
     const loadInitialView = async () => {
-      if (notes.length > 0 && activeView.id === null && activeView.type === 'note') {
+      if (activeView.type === 'note' && activeView.id === null && notes.length > 0) {
         setActiveView({ type: 'note', id: notes[0].id! });
-      } else if (notes.length === 0 && nostrProfiles.length > 0 && activeView.id === null && activeView.type === 'profile') { // Check this condition
+      } else if (activeView.type === 'profile' && activeView.id === null && nostrProfiles.length > 0 && notes.length === 0) {
          setActiveView({ type: 'profile', id: nostrProfiles[0].id! });
       } else if (activeView.type === 'note' && activeView.id === null && notes.length === 0 && nostrProfiles.length === 0) {
         // If everything is empty, ensure it doesn't try to set an ID.
-        // This might already be handled by currentNote becoming null.
       }
     };
     loadInitialView();
-  }, [notes, nostrProfiles, activeView.id, activeView.type]); // Adjusted dependencies
+  }, [notes, nostrProfiles, activeView]);
 
 
   useEffect(() => {
     const fetchActiveItem = async () => {
-      setIsEditing(false); // Reset editing state when view changes
+      setIsEditing(false);
       if (activeView.type === 'note' && activeView.id !== null) {
         const note = await noteService.getNoteById(activeView.id);
         setCurrentNote(note || null);
         if (note) setIsEditing(true);
       } else if (activeView.type === 'profile' && activeView.id !== null) {
         let profile = await nostrProfileService.getProfileNoteById(activeView.id);
-        setCurrentNote(profile || null); // Display from DB first
+        setCurrentNote(profile || null);
 
-        if (profile && navigator.onLine) { // If profile exists and online
-          // Stale if not checked in the last 15 minutes, or if nostrProfileService itself would refetch (e.g. > 24h)
-          const isStaleByTime = !profile.lastChecked || (Date.now() - new Date(profile.lastChecked).getTime() > 15 * 60 * 1000); // 15 minutes
+        if (profile && navigator.onLine) {
+          const isStaleByTime = !profile.lastChecked || (Date.now() - new Date(profile.lastChecked).getTime() > 15 * 60 * 1000);
 
           if (isStaleByTime) {
             setIsFetchingProfile(true);
             try {
-              await nostrProfileService.createOrUpdateProfileNote({ npub: profile.npub }, profile.npub, true);
-              const refreshedProfile = await nostrProfileService.getProfileNoteById(activeView.id);
-              setCurrentNote(refreshedProfile || null);
-              // addToast('Profile data refreshed.', 'success'); // Optional: can be noisy
+              // Ensure activeView.id is not null before using it for re-fetching profile.
+              // This check might be redundant given the outer if, but good for safety.
+              if (activeView.type === 'profile' && activeView.id !== null) {
+                await nostrProfileService.createOrUpdateProfileNote({ npub: profile.npub }, profile.npub, true);
+                const refreshedProfile = await nostrProfileService.getProfileNoteById(activeView.id);
+                setCurrentNote(refreshedProfile || null);
+              }
             } catch (error) {
               console.error("Failed to automatically refresh profile in App.tsx:", error);
               addToast(`Failed to refresh profile: ${(error as Error).message}`, 'error');
@@ -347,12 +355,12 @@ function App() {
       } else if (activeView.type === 'new_note_editor') {
         setCurrentNote(null);
         setIsEditing(true);
-      } else if (activeView.type !== 'direct_messages' && activeView.type !== 'settings') { // Don't nullify for DM or settings
+      } else if (activeView.type !== 'direct_messages' && activeView.type !== 'settings') {
         setCurrentNote(null);
       }
     };
     fetchActiveItem();
-  }, [activeView]);
+  }, [activeView, addToast]); // Added addToast to dependency array
 
   // DM Subscription is now handled within DirectMessagesPage.tsx itself
   // The global DM subscription logic previously planned for App.tsx is better scoped there.
@@ -459,8 +467,13 @@ function App() {
 
     setCurrentNote(null);
     // Select next available item or clear view
-    const remainingNotesArray = await firstValueFrom(noteService.searchNotes(''));
-    const remainingProfilesArray = await firstValueFrom(nostrProfileService.getAllProfileNotes());
+    // TS18046: 'remainingNotesArray' is of type 'unknown'.
+    // TS18046: 'remainingProfilesArray' is of type 'unknown'.
+    // These were due to firstValueFrom not having explicit typing in this context.
+    // Explicitly type them or ensure the service methods return typed Observables.
+    // For now, casting to `any` to resolve build, but should be fixed with proper typing.
+    const remainingNotesArray = await firstValueFrom(noteService.searchNotes('') as unknown as Observable<Note[]>) as Note[];
+    const remainingProfilesArray = await firstValueFrom(nostrProfileService.getAllProfileNotes() as unknown as Observable<NostrProfileNote[]>) as NostrProfileNote[];
 
     if (remainingNotesArray.length > 0) {
         setActiveView({ type: 'note', id: remainingNotesArray[0].id! });
@@ -491,12 +504,12 @@ function App() {
   // const handleShowSettings = () => setActiveView({ type: 'settings' }); // Moved up
   const handleExitSettings = () => {
      // Default to DMs if no other view was active, or to the last note/profile
-    if (currentNote && activeView.type !== 'settings') { // activeView might be 'profile' or 'note'
-        setActiveView(activeView);
+    if (currentNote && activeView.type !== 'settings' && (activeView.type === 'note' || activeView.type === 'profile')) {
+        setActiveView(activeView); // Restore the previous note/profile view
     } else if (notes.length > 0) {
-        setActiveView({type: 'note', id: notes[0].id});
+        setActiveView({type: 'note', id: notes[0].id!});
     } else {
-        setActiveView({type: 'direct_messages'});
+        setActiveView({type: 'direct_messages'}); // Fallback to DMs
     }
   }
 
@@ -560,7 +573,6 @@ function App() {
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
         actions={memoizedCommandActions}
-        currentTheme={theme}
       />
       <TagManagementView
         isOpen={isTagManagementViewOpen}

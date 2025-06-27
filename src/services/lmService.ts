@@ -1,15 +1,17 @@
 import { Ollama } from "@langchain/community/llms/ollama";
-import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
+import { ChatOpenAI } from "@langchain/openai"; // OpenAIEmbeddings removed
 import { ChatAnthropic } from "@langchain/anthropic";
 import { BaseLanguageModel } from "@langchain/core/language_models/base";
 import { AIMessage, HumanMessage, SystemMessage, BaseMessage, AIMessageChunk } from "@langchain/core/messages";
 import { AgentExecutor, createToolCallingAgent, AgentStep } from "langchain/agents";
 import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
-import { Tool } from "@langchain/core/tools";
+// Tool removed from here, as getTools() provides typed tools
+// import { firstValueFrom } from "rxjs"; // No longer used here
 
 import * as settingsService from "./settingsService";
 import { Settings } from "../db/db";
 import { getTools } from "./langchainToolsService";
+import { db } from "../db/db"; // Import db directly
 
 let llm: BaseLanguageModel | null = null;
 let agentExecutorInstance: AgentExecutor | null = null;
@@ -29,10 +31,14 @@ function generateSettingsSignature(settings: Settings | null, apiKey?: string): 
 
 export const getLLM = (): BaseLanguageModel | null => llm;
 
+// ... (other imports) // This comment might be from the bad merge
+
 async function initializeLLMAndAgent(): Promise<boolean> {
-    const settings = await settingsService.getSettings();
-    if (!settings?.lmModel) {
-        console.warn("LLM model not configured.");
+    // Fetch settings directly as a one-time operation for initialization
+    const settings = await db.settings.get(1);
+
+    if (!settings || !settings.lmModel) {
+        console.warn("LLM model not configured or settings not available.");
         llm = null;
         agentExecutorInstance = null;
         currentModelName = null;
@@ -56,16 +62,16 @@ async function initializeLLMAndAgent(): Promise<boolean> {
     try {
         if (settings.lmModel.startsWith("gpt-")) {
             if (!apiKey) throw new Error("OpenAI API key not set.");
-            llm = new ChatOpenAI({ modelName: settings.lmModel, apiKey, streaming: true, temperature: 0.7 });
+            llm = new ChatOpenAI({ modelName: settings.lmModel, apiKey, streaming: true, temperature: 0.7 }) as unknown as BaseLanguageModel<any, any>;
         } else if (settings.lmModel.startsWith("claude-")) {
             if (!apiKey) throw new Error("Anthropic API key not set.");
-            llm = new ChatAnthropic({ modelName: settings.lmModel, apiKey, streaming: true, temperature: 0.7 });
+            llm = new ChatAnthropic({ modelName: settings.lmModel, apiKey, streaming: true, temperature: 0.7 }) as any; // Cast to any
         } else if (settings.ollamaBaseUrl && settings.lmModel) {
-            llm = new Ollama({ baseUrl: settings.ollamaBaseUrl, model: settings.lmModel, temperature: 0.7 });
+            llm = new Ollama({ baseUrl: settings.ollamaBaseUrl, model: settings.lmModel, temperature: 0.7 }) as unknown as BaseLanguageModel<any, any>;
         } else if (settings.lmModel.includes("gemini")) {
             console.warn("Gemini model selected. Basic compatibility assumed if API key provided for ChatOpenAI-like behavior.");
             if (apiKey) { // Attempt to use with OpenAI-like Chat Interface if possible
-                llm = new ChatOpenAI({ modelName: "gemini-pro", apiKey, streaming: true, temperature: 0.7}); // This is an assumption
+                llm = new ChatOpenAI({ modelName: "gemini-pro", apiKey, streaming: true, temperature: 0.7}) as unknown as BaseLanguageModel<any, any>; // This is an assumption
             } else {
                 throw new Error("Gemini model selected, but no API key provided or specific Google integration is missing.");
             }
@@ -76,15 +82,17 @@ async function initializeLLMAndAgent(): Promise<boolean> {
 
         // Initialize Agent
         const tools = getTools();
-        if (llm instanceof ChatOpenAI || llm instanceof ChatAnthropic) { // Check if LLM supports tool calling
+        if (llm && (llm instanceof ChatOpenAI || llm instanceof ChatAnthropic)) { // Check if LLM supports tool calling and is not null
             const prompt = ChatPromptTemplate.fromMessages([
                 ["system", "You are a helpful assistant. You have access to tools. Use them when appropriate. Respond to the user directly if no tools are needed or after tool execution."],
                 new MessagesPlaceholder("chat_history"),
                 ["human", "{input}"],
                 new MessagesPlaceholder("agent_scratchpad"),
             ]);
-            const agent = await createToolCallingAgent({ llm, tools, prompt });
-            agentExecutorInstance = new AgentExecutor({ agent, tools, verbose: true });
+            // Cast tools and prompt to 'any' as a temporary workaround for version inconsistencies
+            if (!llm) throw new Error("LLM not initialized for agent creation."); // Explicit check
+            const agent = await createToolCallingAgent({ llm: llm, tools: tools as any, prompt: prompt as any });
+            agentExecutorInstance = new AgentExecutor({ agent, tools: tools as any, verbose: true });
             console.log("AgentExecutor initialized with tools:", tools.map(t => t.name).join(', '));
         } else {
             console.warn(`LLM ${llm.constructor.name} may not support advanced tool calling agents. Tool usage will be limited or disabled.`);
@@ -137,7 +145,7 @@ export const streamLLMResponse = async (
                     input: input,
                     chat_history: messagesForHistory,
                     // System message is part of the agent's prompt template
-                }, { signal });
+                }, { signal } as any); // Cast config to 'any' for signal compatibility workaround
 
                 for await (const chunk of stream) {
                     if (signal.aborted) break;
@@ -164,6 +172,7 @@ export const streamLLMResponse = async (
                 if (systemContext) messages.unshift(new SystemMessage(systemContext)); // Add system if provided and no agent
                 messages.push(new HumanMessage(input));
 
+                if (!llm) throw new Error("LLM not initialized for streaming."); // Explicit check
                 const stream = await llm.stream(messages, { signal });
                 for await (const chunk of stream) {
                     if (signal.aborted) break;

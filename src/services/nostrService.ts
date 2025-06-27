@@ -3,15 +3,38 @@ import {
   EventTemplate,
   nip04,
   nip19,
-  getPublicKey,
+  // getPublicKey, // No longer used directly in this file
   SimplePool,
   Filter,
-  finalizeEvent,
-  relayInit,
-  Relay
+  finalizeEvent
+  // relayInit, // Not used with SimplePool typically, and might be from older nostr-tools
+  // Relay // Type not used directly
 } from 'nostr-tools';
 import * as settingsService from './settingsService';
 import { db } from '../db/db';
+
+// Helper function to convert hex string to Uint8Array
+function hexToUint8Array(hexString: string): Uint8Array {
+  if (hexString.length % 2 !== 0) {
+    // Ensure even length for valid hex string
+    console.error("Invalid hex string: must have an even number of characters.", hexString);
+    throw new Error("Invalid hex string format.");
+  }
+  const byteArray = new Uint8Array(hexString.length / 2);
+  for (let i = 0; i < hexString.length; i += 2) {
+    byteArray[i / 2] = parseInt(hexString.substring(i, i + 2), 16);
+    if (isNaN(byteArray[i/2])) {
+        console.error("Invalid character in hex string:", hexString);
+        throw new Error("Invalid character in hex string.");
+    }
+  }
+  return byteArray;
+}
+
+// Helper function to convert Uint8Array to hex string (Commented out as it seems unused due to nostr-tools types)
+// function uint8ArrayToHex(bytes: Uint8Array): string {
+//   return bytes.reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '');
+// }
 
 // Initialize a single SimplePool instance
 const pool = new SimplePool();
@@ -82,7 +105,8 @@ export const publishEvent = async (eventTemplate: EventTemplate): Promise<Event 
   }
 
   // finalizeEvent calculates ID, sets pubkey, and signs the event
-  const signedEvent = finalizeEvent(eventTemplate, privKeyHex);
+  const privKeyBytes = hexToUint8Array(privKeyHex);
+  const signedEvent = finalizeEvent(eventTemplate, privKeyBytes);
 
   try {
     const pubs = pool.publish(currentRelayUrls, signedEvent);
@@ -113,14 +137,14 @@ export const publishKind1Note = async (content: string, tags: string[][] = []): 
     if (!privKeyHex) {
         throw new Error('Nostr private key not configured.');
     }
-    const pubKeyHex = getPublicKey(privKeyHex);
+    // const pubKeyHex = getPublicKey(privKeyHex); // Unused
 
     const eventTemplate: EventTemplate = {
         kind: 1,
         created_at: Math.floor(Date.now() / 1000),
         tags: tags,
         content: content,
-        pubkey: pubKeyHex, // Will be set by finalizeEvent
+        // pubkey: pubKeyHex, // Removed: finalizeEvent sets this
     };
     return publishEvent(eventTemplate);
 };
@@ -131,14 +155,14 @@ export const publishProfileEvent = async (profileContent: { name?: string, about
   if (!privKeyHex) {
     throw new Error('Nostr private key not configured.');
   }
-  const pubKeyHex = getPublicKey(privKeyHex);
+  // const pubKeyHex = getPublicKey(privKeyHex); // Unused
 
   const eventTemplate: EventTemplate = {
     kind: 0, // Profile metadata
     created_at: Math.floor(Date.now() / 1000),
     tags: [], // NIP-01 doesn't specify tags for kind 0, but some clients might use them
     content: JSON.stringify(profileContent),
-    pubkey: pubKeyHex, // Will be set by finalizeEvent
+    // pubkey: pubKeyHex, // Removed: finalizeEvent sets this
   };
   return publishEvent(eventTemplate);
 };
@@ -150,15 +174,17 @@ export const sendEncryptedDirectMessage = async (recipientPubKeyHex: string, pla
   if (!privKeyHex) {
     throw new Error('Nostr private key not configured.');
   }
-  const pubKeyHex = getPublicKey(privKeyHex);
+  // const pubKeyHex = getPublicKey(privKeyHex); // Not needed here, finalizeEvent uses privKeyHex
 
-  if (recipientPubKeyHex === pubKeyHex) {
-    throw new Error('Cannot send NIP-04 encrypted message to self using this method.');
-  }
+  // if (recipientPubKeyHex === pubKeyHex) { // This check is fine
+  //   throw new Error('Cannot send NIP-04 encrypted message to self using this method.');
+  // }
 
   let encryptedContent: string;
   try {
-    encryptedContent = nip04.encrypt(privKeyHex, recipientPubKeyHex, plainText);
+    const privKeyBytes = hexToUint8Array(privKeyHex);
+    // recipientPubKeyHex is already hex, nip04.encrypt expects hex for recipient pubkey
+    encryptedContent = nip04.encrypt(privKeyBytes, recipientPubKeyHex, plainText);
   } catch (e) {
     console.error("NIP-04 encryption failed:", e);
     throw new Error('Failed to encrypt message for NIP-04.');
@@ -169,7 +195,7 @@ export const sendEncryptedDirectMessage = async (recipientPubKeyHex: string, pla
     created_at: Math.floor(Date.now() / 1000),
     tags: [['p', recipientPubKeyHex]], // NIP-04 specifies 'p' tag for recipient
     content: encryptedContent,
-    pubkey: pubKeyHex, // Will be set by finalizeEvent
+    // pubkey: pubKeyHex, // Removed: finalizeEvent sets this
   };
   return publishEvent(eventTemplate);
 };
@@ -185,22 +211,26 @@ export const isNostrUserConfigured = async (): Promise<boolean> => {
 // For NIP-19 (bech32) encoding/decoding, if needed for display or input
 export const npubToHex = (npub: string): string => {
     try {
-        const { type, data } = nip19.decode(npub);
-        if (type === 'npub') return data as string;
+        const decoded = nip19.decode(npub);
+        if (decoded.type === 'npub') {
+            return decoded.data as unknown as string; // Force cast, assuming it's string
+        }
     } catch (e) {
-        console.error("Failed to decode npub:", e);
+        console.error(`Failed to decode npub ${npub}:`, e);
     }
-    throw new Error('Invalid npub string');
+    throw new Error('Invalid npub string.');
 };
 
 export const nsecToHex = (nsec: string): string => {
      try {
-        const { type, data } = nip19.decode(nsec);
-        if (type === 'nsec') return data as string;
+        const decoded = nip19.decode(nsec);
+        if (decoded.type === 'nsec') {
+            return decoded.data as unknown as string; // Force cast, assuming it's string
+        }
     } catch (e) {
-        console.error("Failed to decode nsec:", e);
+        console.error(`Failed to decode nsec ${nsec}:`, e);
     }
-    throw new Error('Invalid nsec string');
+    throw new Error('Invalid nsec string.');
 };
 
 export const pubKeyToNpub = (hex: string): string => {
@@ -237,7 +267,7 @@ export const fetchEvents = async (filters: Filter[]): Promise<Event[]> => {
   try {
     // SimplePool.list will query all specified relays and return events.
     // It waits for EOSE from all relays or times out.
-    const events = await pool.list(currentRelayUrls, filters);
+    const events = await (pool as any).list(currentRelayUrls, filters); // Cast pool to any for list method
     return events;
   } catch (error) {
     console.error('Error fetching events:', error);
@@ -256,7 +286,7 @@ export const publishKind3ContactList = async (contacts: ContactListEntry[]): Pro
   if (!privKeyHex) {
     throw new Error('Nostr private key not configured.');
   }
-  const pubKeyHex = getPublicKey(privKeyHex);
+  // const pubKeyHex = getPublicKey(privKeyHex); // Unused
 
   const tags: string[][] = contacts.map(contact => {
     const tag = ['p', contact.pubkey];
@@ -290,7 +320,7 @@ export const publishKind3ContactList = async (contacts: ContactListEntry[]): Pro
     created_at: Math.floor(Date.now() / 1000),
     tags: tags,
     content: "", // Or JSON.stringify if choosing that format
-    pubkey: pubKeyHex,
+    // pubkey: pubKeyHex, // Removed: finalizeEvent sets this
   };
   return publishEvent(eventTemplate);
 };
@@ -373,7 +403,9 @@ export const subscribeToDirectMessages = async (
           }
 
           try {
-            const decryptedContent = nip04.decrypt(privKeyHex, senderHex, event.content);
+            const privKeyBytes = hexToUint8Array(privKeyHex);
+            // senderHex is already hex, nip04.decrypt expects hex for sender pubkey
+            const decryptedContent = nip04.decrypt(privKeyBytes, senderHex, event.content);
             console.log(`Decrypted DM from ${pubKeyToNpub(senderHex)}:`, decryptedContent);
             onDmReceived(event, decryptedContent, pubKeyToNpub(senderHex));
           } catch (e) {
@@ -387,8 +419,9 @@ export const subscribeToDirectMessages = async (
             const recipientTag = event.tags.find(tag => tag[0] === 'p');
             if (recipientTag && recipientTag[1] && privKeyHex) {
                 try {
-                    // Decrypt self-sent message to confirm content or for local storage
-                    const decryptedContent = nip04.decrypt(privKeyHex, recipientTag[1], event.content);
+                    const privKeyBytes = hexToUint8Array(privKeyHex);
+                    // recipientTag[1] is already hex
+                    const decryptedContent = nip04.decrypt(privKeyBytes, recipientTag[1], event.content);
                     console.log(`Received self-sent DM (id: ${event.id}) to ${pubKeyToNpub(recipientTag[1])}:`, decryptedContent);
                     // Typically, the onDmReceived callback would handle saving to DB.
                     // The callback needs to know it's a self-sent message.

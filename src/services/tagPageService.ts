@@ -1,4 +1,4 @@
-import { db, TagPage, Note } from '../db/db'; // Assuming Note might be needed for counts, or adjust if not.
+import { db, TagPage } from '../db/db'; // Note removed
 import { liveQuery, Observable } from 'dexie';
 
 // Interface for the object returned by getAllTagPagesWithItemCounts

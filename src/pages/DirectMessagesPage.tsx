@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react'; // Removed useCallback
 import { useLiveQuery } from 'dexie-react-hooks';
+import Dexie from 'dexie'; // Import Dexie
 import { db, NostrProfileNote, DirectMessage, Settings } from '../db/db';
 import * as nostrService from '../services/nostrService';
 import * as settingsService from '../services/settingsService';
 import ChatMessage from '../components/ChatMessage';
 import { ArrowLeftIcon, PaperAirplaneIcon } from '@heroicons/react/24/solid';
+import { Event as NostrEvent } from 'nostr-tools'; // Import Event from nostr-tools
 
 const DirectMessagesPage: React.FC = () => {
   const [selectedContactNpub, setSelectedContactNpub] = useState<string | null>(null);
@@ -52,16 +54,16 @@ const DirectMessagesPage: React.FC = () => {
   useEffect(() => {
     let unsubscribeFunction: (() => void) | null = null;
 
-    const handleNewDm = async (event: nostrService.Event, decryptedContent: string, senderNpub: string) => {
+    const handleNewDm = async (event: NostrEvent, decryptedContent: string, senderNpub: string) => {
       if (!currentUserNpub) return;
 
       const newDm: DirectMessage = {
         eventId: event.id,
-        peerNpub: senderNpub === currentUserNpub ? (event.tags.find(t => t[0] === 'p')?.[1] ? nostrService.pubKeyToNpub(event.tags.find(t => t[0] === 'p')![1]) : 'unknown') : senderNpub,
+        peerNpub: senderNpub === currentUserNpub ? (event.tags.find((tag: string[]) => tag[0] === 'p')?.[1] ? nostrService.pubKeyToNpub(event.tags.find((tag: string[]) => tag[0] === 'p')![1]) : 'unknown') : senderNpub,
         isSender: senderNpub === currentUserNpub,
         content: decryptedContent,
         createdAt: new Date(event.created_at * 1000),
-        tags: event.tags,
+        tags: event.tags as string[][], // Cast tags if necessary, nostr-tools Event['tags'] is string[][]
       };
 
       // Avoid duplicate additions

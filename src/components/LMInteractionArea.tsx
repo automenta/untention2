@@ -71,7 +71,7 @@ const LMInteractionArea: React.FC<LMInteractionAreaProps> = ({ currentNoteConten
     const llmHistory = chatHistory
       .filter(m => m.type === 'human' || m.type === 'ai')
       .slice(-6) // last 3 turns
-      .map(m => ({ type: m.type, content: m.content }));
+      .map(m => ({ type: m.type as 'human' | 'ai', content: m.content })); // Ensure correct type for llmHistory
 
     let currentAIResponseId = `ai-${Date.now()}`;
     setChatHistory(prev => [...prev, { id: currentAIResponseId, type: 'ai', content: '' }]);

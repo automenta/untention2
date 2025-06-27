@@ -21,7 +21,7 @@ const availableModels = {
 };
 
 const SettingsPage: React.FC<SettingsPageProps> = ({ onExit }) => {
-  const currentSettings = useLiveQuery(settingsService.getSettings(), []) as Settings | undefined;
+  const currentSettings = useLiveQuery(() => settingsService.getSettings(), []) as Settings | undefined;
 
   interface ValidationErrors {
     lmApiKey?: string;
@@ -52,6 +52,27 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onExit }) => {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   // Removed statusMessage state
   const { addToast } = useToastContext(); // Use toast context
+
+  const loadProfile = useCallback(async (npub: string) => {
+    if (!npub) return;
+    // Removed setProfileStatusMessage(null);
+    try {
+      let profile = await nostrProfileService.getProfileNoteByNpub(npub);
+      if (profile) {
+        setUserNostrProfile({
+          name: profile.name || '',
+          about: profile.about || '',
+          picture: profile.picture || '',
+          nip05: profile.nip05 || '',
+        });
+      } else {
+        setUserNostrProfile({ name: '', about: '', picture: '', nip05: '' });
+      }
+    } catch (e: any) {
+      console.error("Error loading profile", e);
+      addToast(`Failed to load profile: ${e.message}`, 'error');
+    }
+  }, [addToast, setUserNostrProfile]); // Added setUserNostrProfile to dependencies
 
   const deriveAndSetNostrPubKey = useCallback((privKey: string) => {
     if (privKey && privKey.match(/^[a-f0-9]{64}$/)) {
@@ -180,26 +201,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onExit }) => {
     }
   };
 
-  const loadProfile = useCallback(async (npub: string) => {
-    if (!npub) return;
-    // Removed setProfileStatusMessage(null);
-    try {
-      let profile = await nostrProfileService.getProfileNoteByNpub(npub);
-      if (profile) {
-        setUserNostrProfile({
-          name: profile.name || '',
-          about: profile.about || '',
-          picture: profile.picture || '',
-          nip05: profile.nip05 || '',
-        });
-      } else {
-        setUserNostrProfile({ name: '', about: '', picture: '', nip05: '' });
-      }
-    } catch (e: any) {
-      console.error("Error loading profile", e);
-      addToast(`Failed to load profile: ${e.message}`, 'error');
-    }
-  }, [addToast]);
+  // Removed duplicate loadProfile definition. The one at the top of the component (around line 56) is kept.
 
   const handleFetchFullProfileFromRelay = async () => {
     if (!nostrPubKey) {
@@ -303,7 +305,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onExit }) => {
   };
 
   const getModelsForProvider = () => {
-    if (!selectedProvider || selectedProvider === 'ollama') return availableModels.ollama; // For Ollama, model is typed manually or defaults
+    if (selectedProvider === '' || (selectedProvider as any) === 'ollama') return availableModels.ollama; // For Ollama, model is typed manually or defaults
     return availableModels[selectedProvider] || [];
   };
 
