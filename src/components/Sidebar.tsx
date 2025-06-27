@@ -121,7 +121,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               </li>
             ))}
             {notes.length === 0 && (
-              <p className="text-xs text-gray-400 dark:text-gray-500 px-3">No notes yet.</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 px-3 italic">No notes yet. Click "New Note" above to create one.</p>
             )}
           </ul>
         </div>
@@ -147,7 +147,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               </li>
             ))}
             {nostrProfiles.length === 0 && (
-              <p className="text-xs text-gray-400 dark:text-gray-500 px-3">No contacts yet.</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 px-3 italic">No contacts yet. Click "Add Nostr Contact" above.</p>
             )}
           </ul>
         </div>
@@ -189,7 +189,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               ))}
             </ul>
           ) : (
-            <p className="text-xs text-gray-400 dark:text-gray-500 px-3">No tags yet.</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 px-3 italic">No tags found. Add tags to notes or contacts.</p>
           )}
         </div>
       </div>

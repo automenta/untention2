@@ -9,11 +9,14 @@ import {
   SunIcon,
   MoonIcon,
   ChatBubbleLeftRightIcon,
+  TagIcon, // Added for Manage Tags
+  TrashIcon, // Added for Clear Cache
 } from '@heroicons/react/24/outline';
 import { useHotkeys } from 'react-hotkeys-hook'; // Import useHotkeys
 import AddNostrContactModal from './components/AddNostrContactModal';
 import NostrProfileView from './components/NostrProfileView';
 import DirectMessagesPage from './pages/DirectMessagesPage'; // Import DM Page
+import TagManagementView from './components/TagManagementView'; // Added for Manage Tags
 import { db, Note, NostrProfileNote, DirectMessage, TagPage } from './db/db';
 import * as noteService from './services/noteService';
 import * as nostrProfileService from './services/nostrProfileService';
@@ -23,6 +26,7 @@ import * as nostrService from './services/nostrService'; // For Kind 3 fetch
 import * as settingsService from './services/settingsService'; // To check for theme and nostr pubkey
 import * as tagPageService from './services/tagPageService'; // Import tagPageService
 import { TagPageWithCount } from './services/tagPageService'; // Import type
+import * as lmCacheService from './services/lmCacheService'; // Added for Clear LM Cache
 
 type ActiveView =
   | { type: 'note'; id: number | null }
@@ -41,6 +45,7 @@ function App() {
 
   const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false); // State for Command Palette
+  const [isTagManagementViewOpen, setIsTagManagementViewOpen] = useState(false); // State for TagManagementView
   const [theme, setTheme] = useState<'light' | 'dark'>(
     localStorage.getItem('theme') as 'light' | 'dark' || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   );
@@ -135,61 +140,24 @@ function App() {
     setIsEditing(false);
   }
 
-  const commandActions: CommandAction[] = [
-    {
-      id: 'new-note',
-      name: 'New Note',
-      keywords: 'create document text',
-      perform: () => {
-        handleCreateNewNote();
-        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
-      },
-      icon: <DocumentPlusIcon className="w-5 h-5" />,
-    },
-    {
-      id: 'add-nostr-contact',
-      name: 'Add Nostr Contact',
-      keywords: 'profile person new follow',
-      perform: handleCreateNewProfile,
-      icon: <UserPlusIcon className="w-5 h-5" />,
-    },
-    {
-      id: 'open-settings',
-      name: 'Open Settings',
-      keywords: 'preferences configuration options',
-      perform: () => {
-        handleShowSettings();
-        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
-      },
-      icon: <Cog8ToothIcon className="w-5 h-5" />,
-    },
-    {
-      id: 'toggle-theme',
-      name: `Toggle Theme to ${theme === 'light' ? 'Dark' : 'Light'}`,
-      keywords: 'dark light appearance mode style',
-      perform: toggleTheme,
-      icon: theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />,
-    },
-     {
-      id: 'direct-messages',
-      name: 'Direct Messages',
-      keywords: 'dm chat private message',
-      perform: () => {
-        handleShowDirectMessages();
-        if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
-      },
-      icon: <ChatBubbleLeftRightIcon className="w-5 h-5" />,
-    },
-    // Future actions:
-    // - Find/Search Notes (would need a way to then display results or integrate with existing search)
-    // - Find/Search Contacts
-    // - Specific LM tools if available
-    // - Insert template/tag (more complex)
-  ];
+  function handleShowTagManagementView() {
+    setIsTagManagementViewOpen(true);
+  }
 
-  // Re-generate commandActions if theme changes so the "Toggle Theme" name and icon updates
-  // This is a bit of a workaround; ideally, CommandPalette would re-render specific items.
-  // However, given the current structure, regenerating the actions array is simpler.
+  async function handleClearLmCache() {
+    if (window.confirm("Are you sure you want to clear the LM response cache? This cannot be undone.")) {
+      try {
+        await lmCacheService.clearLMCache();
+        addToast('LM response cache cleared successfully.', 'success');
+      } catch (error) {
+        addToast(`Failed to clear LM cache: ${(error as Error).message}`, 'error');
+        console.error("Failed to clear LM cache:", error);
+      }
+    }
+  }
+
+  // Regenerate commandActions if theme changes so the "Toggle Theme" name and icon updates
+  // Also depends on isSidebarOpen for closing sidebar logic.
   const memoizedCommandActions = React.useMemo(() => [
     {
       id: 'new-note',
@@ -225,17 +193,34 @@ function App() {
       perform: toggleTheme,
       icon: theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />,
     },
-     {
+    {
       id: 'direct-messages',
       name: 'Direct Messages',
-      keywords: 'dm chat private message',
+      keywords: 'dm chat private message nostr',
       perform: () => {
         handleShowDirectMessages();
         if (window.innerWidth < 768 && isSidebarOpen) setIsSidebarOpen(false);
       },
       icon: <ChatBubbleLeftRightIcon className="w-5 h-5" />,
     },
-  ], [theme, isSidebarOpen]); // Add isSidebarOpen as dependency if its state affects perform functions indirectly
+    {
+      id: 'manage-tags',
+      name: 'Manage Tags',
+      keywords: 'tags categories labels organize',
+      perform: () => {
+        handleShowTagManagementView();
+        // CommandPalette closes itself, no need to manage sidebar here explicitly for modal
+      },
+      icon: <TagIcon className="w-5 h-5" />,
+    },
+    {
+      id: 'clear-lm-cache',
+      name: 'Clear LM Cache',
+      keywords: 'llm large language model cache memory clear delete reset',
+      perform: handleClearLmCache,
+      icon: <TrashIcon className="w-5 h-5" />,
+    },
+  ], [theme, isSidebarOpen, addToast]); // Added addToast to dependencies
 
 
   // Effect for fetching user's Kind 3 contact list on startup
@@ -566,6 +551,10 @@ function App() {
         onClose={() => setIsCommandPaletteOpen(false)}
         actions={memoizedCommandActions}
         currentTheme={theme}
+      />
+      <TagManagementView
+        isOpen={isTagManagementViewOpen}
+        onClose={() => setIsTagManagementViewOpen(false)}
       />
     </FullToastProvider>
   );

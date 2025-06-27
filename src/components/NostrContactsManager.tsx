@@ -7,6 +7,7 @@ import * as nostrProfileService from '../services/nostrProfileService';
 import { nip19 } from 'nostr-tools/nip19';
 import { Event } from 'nostr-tools/pure';
 import { ArrowDownTrayIcon, ArrowUpTrayIcon, ArrowPathIcon, UserPlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { useToastContext } from '../contexts/ToastContext'; // Import useToastContext
 
 interface NostrContactsManagerProps {
   userNpub: string; // User's own npub
@@ -14,10 +15,10 @@ interface NostrContactsManagerProps {
 }
 
 const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, onClose }) => {
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [newContactNpub, setNewContactNpub] = useState('');
   const [newContactPetname, setNewContactPetname] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const { addToast } = useToastContext(); // Use toast context
 
   const contacts = useLiveQuery(
     () => db.nostrProfiles.where('isContact').equals(1).sortBy('title'),
@@ -26,18 +27,13 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
 
   const userHexPubkey = userNpub ? nostrService.npubToHex(userNpub) : '';
 
-  const showMessage = (type: 'success' | 'error', text: string) => {
-    setStatusMessage({ type, text });
-    setTimeout(() => setStatusMessage(null), 4000);
-  };
-
   const handleFetchContactsFromRelay = useCallback(async () => {
     if (!userHexPubkey) {
-      showMessage('error', 'User public key not available.');
+      addToast('User public key not available.', 'error');
       return;
     }
     setIsLoading(true);
-    showMessage('success', 'Fetching contact list from relay...');
+    addToast('Fetching contact list from relay...', 'info');
     try {
       const kind3Event = await nostrService.fetchKind3ContactListEvent(userHexPubkey);
       if (kind3Event && kind3Event.tags) {
@@ -46,13 +42,14 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
           if (tag[0] === 'p' && tag[1]) {
             const contactHexPubkey = tag[1];
             const contactNpub = nip19.npubEncode(contactHexPubkey);
-            const relayUrl = tag[2] || undefined; // NIP-02: recommended relay URL
+            // const relayUrl = tag[2] || undefined; // NIP-02: recommended relay URL
             const petname = tag[3] || undefined; // NIP-02: petname
 
             await nostrProfileService.createOrUpdateProfileNote(
               {
                 npub: contactNpub,
                 title: petname || contactNpub.substring(0,10), // Use petname as title if available
+                isContact: true, // Ensure fetched contacts are marked as such
                 // We could store relayUrl from kind3 if desired, e.g. in a custom field or local notes.
               },
               contactNpub, // npubToFetch for potential kind0 lookup
@@ -61,24 +58,24 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
             contactsProcessed++;
           }
         }
-        showMessage('success', `Contact list fetched. ${contactsProcessed} contacts processed.`);
+        addToast(`Contact list fetched. ${contactsProcessed} contacts processed.`, 'success');
       } else {
-        showMessage('success', 'No contact list (Kind 3) found on relay or it was empty.');
+        addToast('No contact list (Kind 3) found on relay or it was empty.', 'info');
       }
     } catch (error: any) {
-      showMessage('error', `Failed to fetch contacts: ${error.message}`);
+      addToast(`Failed to fetch contacts: ${error.message}`, 'error');
     } finally {
       setIsLoading(false);
     }
-  }, [userHexPubkey]);
+  }, [userHexPubkey, addToast]);
 
   const handlePublishContactsToRelay = async () => {
     if (!contacts || contacts.length === 0) {
-      showMessage('error', 'No contacts to publish. Add some contacts first.');
+      addToast('No contacts to publish. Add some contacts first.', 'error');
       return;
     }
     setIsLoading(true);
-    showMessage('success', 'Publishing contact list to relay...');
+    addToast('Publishing contact list to relay...', 'info');
     try {
       const contactListEntries: nostrService.ContactListEntry[] = contacts.map(c => ({
         pubkey: nostrService.npubToHex(c.npub),
@@ -87,12 +84,12 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
       }));
       const publishedEvent = await nostrService.publishKind3ContactList(contactListEntries);
       if (publishedEvent) {
-        showMessage('success', 'Contact list published successfully!');
+        addToast('Contact list published successfully!', 'success');
       } else {
-        showMessage('error', 'Failed to publish contact list.');
+        addToast('Failed to publish contact list.', 'error');
       }
     } catch (error: any) {
-      showMessage('error', `Error publishing contacts: ${error.message}`);
+      addToast(`Error publishing contacts: ${error.message}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -100,37 +97,36 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
 
   const handleAddContact = async () => {
     if (!newContactNpub.trim()) {
-      showMessage('error', 'Contact npub or nprofile cannot be empty.');
+      addToast('Contact npub or nprofile cannot be empty.', 'error');
       return;
     }
     let npubToAdd = newContactNpub.trim();
-    let hexPubkeyToAdd = '';
+    // let hexPubkeyToAdd = ''; // Not directly needed if using npubToAdd consistently
 
     try {
         if (npubToAdd.startsWith('nprofile')) {
             const decoded = nip19.decode(npubToAdd);
             if (decoded.type === 'nprofile' && decoded.data.pubkey) {
-                hexPubkeyToAdd = decoded.data.pubkey;
-                npubToAdd = nip19.npubEncode(hexPubkeyToAdd);
+                // hexPubkeyToAdd = decoded.data.pubkey;
+                npubToAdd = nip19.npubEncode(decoded.data.pubkey);
             } else {
                 throw new Error('Invalid nprofile format');
             }
         } else if (npubToAdd.startsWith('npub')) {
-            hexPubkeyToAdd = nip19.decode(npubToAdd).data as string;
+            // hexPubkeyToAdd = nip19.decode(npubToAdd).data as string; // validation by decode
+            nip19.decode(npubToAdd).data as string; // just validate
         } else {
-             // Assume it's a hex pubkey if not npub/nprofile
-            if (npubToAdd.match(/^[a-f0-9]{64}$/)) {
-                hexPubkeyToAdd = npubToAdd;
-                npubToAdd = nip19.npubEncode(hexPubkeyToAdd);
+            if (npubToAdd.match(/^[a-f0-9]{64}$/)) { // Assume it's a hex pubkey
+                // hexPubkeyToAdd = npubToAdd;
+                npubToAdd = nip19.npubEncode(npubToAdd);
             } else {
                 throw new Error('Invalid public key format. Use npub, nprofile, or hex.');
             }
         }
 
-        // Check if contact already exists
         const existing = await nostrProfileService.getProfileNoteByNpub(npubToAdd);
         if (existing && existing.isContact) {
-            showMessage('error', 'This contact is already in your list.');
+            addToast('This contact is already in your list.', 'error');
             return;
         }
 
@@ -143,42 +139,36 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
             npubToAdd,
             true // Fetch profile info
         );
-        showMessage('success', `Contact ${newContactPetname || npubToAdd.substring(0,10)} added.`);
+        addToast(`Contact ${newContactPetname || npubToAdd.substring(0,10)} added.`, 'success');
         setNewContactNpub('');
         setNewContactPetname('');
     } catch (error: any) {
-        showMessage('error', `Failed to add contact: ${error.message}`);
+        addToast(`Failed to add contact: ${error.message}`, 'error');
     }
   };
 
   const handleRemoveContact = async (profileId: number, npub: string) => {
     try {
-      // Just mark as not a contact, don't delete the profile entry unless desired
-      // await nostrProfileService.deleteProfileNoteById(profileId);
       const profile = await db.nostrProfiles.get(profileId);
       if (profile) {
         await db.nostrProfiles.update(profileId, { isContact: false, updatedAt: new Date() });
-        showMessage('success', `Contact ${profile.title || profile.name} removed from list.`);
-        // Advise user to republish their list
-        setStatusMessage({type: 'success', text: `Contact ${profile.title || profile.name} removed. Publish your list to update relays.`});
-
+        addToast(`Contact ${profile.title || profile.name || npub.substring(0,10)} removed from list. Consider publishing your updated list.`, 'success');
       }
     } catch (error: any) {
-      showMessage('error', `Failed to remove contact: ${error.message}`);
+      addToast(`Failed to remove contact: ${error.message}`, 'error');
     }
     };
 
   const handleDownloadContacts = () => {
     if (!contacts || contacts.length === 0) {
-      showMessage('error', 'No contacts to download.');
+      addToast('No contacts to download.', 'error');
       return;
     }
     const contactListEntries: nostrService.ContactListEntry[] = contacts.map(c => ({
         pubkey: nostrService.npubToHex(c.npub),
         petname: c.title !== c.npub.substring(0,10) ? c.title : (c.name || undefined),
-         // relay: c.relayHint || undefined, // TODO: store relay hints
     }));
-     const kind3EventDraft: Event = { // Not fully signed, just for JSON structure
+     const kind3EventDraft: Event = {
         kind: 3,
         created_at: Math.floor(Date.now() / 1000),
         tags: contactListEntries.map(contact => {
@@ -189,9 +179,9 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
             return tag;
         }),
         content: "",
-        pubkey: userHexPubkey, // placeholder
-        id: '', // placeholder
-        sig: '', // placeholder
+        pubkey: userHexPubkey,
+        id: '',
+        sig: '',
     };
 
     const jsonStr = JSON.stringify(kind3EventDraft, null, 2);
@@ -204,7 +194,7 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showMessage('success', 'Contacts JSON download initiated.');
+    addToast('Contacts JSON download initiated.', 'success');
   };
 
   const handleUploadContacts = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -224,7 +214,7 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
           if (tag[0] === 'p' && tag[1]) {
             const contactHexPubkey = tag[1];
             const contactNpub = nip19.npubEncode(contactHexPubkey);
-            const relayUrl = tag[2] || undefined;
+            // const relayUrl = tag[2] || undefined;
             const petname = tag[3] || undefined;
 
             await nostrProfileService.createOrUpdateProfileNote(
@@ -235,35 +225,33 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
             contactsProcessed++;
           }
         }
-        showMessage('success', `Imported ${contactsProcessed} contacts from JSON. Consider publishing your list.`);
+        addToast(`Imported ${contactsProcessed} contacts from JSON. Consider publishing your list.`, 'success');
         setIsLoading(false);
       } catch (error: any) {
-        showMessage('error', `Error importing contacts: ${error.message}`);
+        addToast(`Error importing contacts: ${error.message}`, 'error');
         setIsLoading(false);
       }
     };
     reader.readAsText(file);
-    event.target.value = ''; // Reset file input
+    event.target.value = '';
   };
 
   const handleRefreshAllContactProfiles = async () => {
     if (contacts.length === 0) {
-      showMessage('error', "No contacts to refresh.");
+      addToast("No contacts to refresh.", 'error');
       return;
     }
     setIsLoading(true);
-    showMessage('success', `Refreshing profiles for ${contacts.length} contact(s)...`);
+    addToast(`Refreshing profiles for ${contacts.length} contact(s)...`, 'info');
     let successCount = 0;
     let failCount = 0;
 
     for (const contact of contacts) {
       try {
-        // Use createOrUpdateProfileNote with fetchFromRelay = true to force a fetch if stale or not recently checked.
-        // The service function itself checks the lastChecked time.
         await nostrProfileService.createOrUpdateProfileNote(
-          { npub: contact.npub }, // Minimal data, mainly to trigger the fetch logic
+          { npub: contact.npub },
           contact.npub,
-          true // Explicitly request fetch from relay
+          true
         );
         successCount++;
       } catch (error) {
@@ -272,14 +260,13 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
       }
     }
     setIsLoading(false);
-    showMessage('success', `Profile refresh complete. ${successCount} succeeded, ${failCount} failed.`);
+    addToast(`Profile refresh complete. ${successCount} succeeded, ${failCount} failed.`, 'success');
   };
 
 
   useEffect(() => {
-    // Optionally auto-fetch contacts when component mounts if list is empty and user is set
     if (userHexPubkey && (!contacts || contacts.length === 0)) {
-      // handleFetchContactsFromRelay(); // Decide if auto-fetch is desired
+      // handleFetchContactsFromRelay(); // Auto-fetch can be noisy with toasts, user can click manually.
     }
   }, [userHexPubkey, contacts, handleFetchContactsFromRelay]);
 
@@ -293,11 +280,7 @@ const NostrContactsManager: React.FC<NostrContactsManagerProps> = ({ userNpub, o
         </button>
       </div>
 
-      {statusMessage && (
-        <div className={`mb-3 p-3 rounded-md text-sm ${statusMessage.type === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-800 dark:text-green-200' : 'bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-200'}`}>
-          {statusMessage.text}
-        </div>
-      )}
+      {/* Remove local statusMessage display, toasts will handle it */}
 
       {/* Add New Contact Form */}
       <div className="mb-6 p-4 border border-gray-200 dark:border-gray-700 rounded-md">

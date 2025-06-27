@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { NostrProfileNote } from '../db/db';
 import * as nostrProfileService from '../services/nostrProfileService';
-import { PencilIcon, TrashIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline';
+import { PencilIcon, TrashIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, ArrowPathIcon } from '@heroicons/react/24/outline'; // Added ArrowPathIcon
+import Spinner from './Spinner'; // Import Spinner
 
 interface NostrProfileViewProps {
   profile: NostrProfileNote;
@@ -126,21 +127,19 @@ const NostrProfileView: React.FC<NostrProfileViewProps> = ({
            <button
             onClick={handleRefetch}
             disabled={isFetchingProfile}
-            className="p-2 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 bg-blue-100 dark:bg-blue-900 rounded-md hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors disabled:opacity-50"
+            className="p-2 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 bg-blue-100 dark:bg-blue-900 rounded-md hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center min-w-[130px]"
             title="Refetch Profile Data from Relay"
           >
             {isFetchingProfile ? (
-              <span className="flex items-center">
-                <ClockIcon className="h-4 w-4 mr-1 animate-spin" />
-                Refreshing...
-              </span>
+              <Spinner size="sm" className="mr-2" />
             ) : (
-              'Refresh Profile'
+              <ArrowPathIcon className="h-4 w-4 mr-1" />
             )}
+            {isFetchingProfile ? 'Refreshing...' : 'Refresh Profile'}
           </button>
           <button
             onClick={handleEdit}
-            disabled={isFetchingProfile}
+            disabled={isFetchingProfile} // Also disable edit if fetching, as data might be stale
             className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             title="Edit local notes for this profile"
           >
